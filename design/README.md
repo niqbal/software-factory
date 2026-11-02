@@ -6,7 +6,8 @@ toolchain and no platform team.
 | File | What it holds |
 |---|---|
 | [DESIGN.md](DESIGN.md) | Full design: goals, adapter model, onboarding flow, core services, risk tiers, security, deployment modes, cost, failure modes, trade-offs |
-| [factory.example.yaml](factory.example.yaml) | The single config file a company owns, with realistic defaults for a TypeScript web app |
+| [factory.example.yaml](factory.example.yaml) | The single config file a company owns, in the schema the implementation accepts |
+| [ventures/software-factory](../../ventures/software-factory/README.md) | The working implementation (`asf`) |
 
 ## The one-paragraph version
 

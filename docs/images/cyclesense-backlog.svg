@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="700" viewBox="0 0 960 700" role="img">
+<title>CycleSense backlog through the software factory</title>
+<style>
+text{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+.bg{fill:#FFFFFF}.card{fill:#F8F7F3;stroke:#D3D1C7}.sep{stroke:#D3D1C7}
+.it{font-size:13px;font-weight:600;fill:#2C2C2A}.sub{font-size:12px;fill:#5F5E5A}.head{font-size:15px;font-weight:600;fill:#2C2C2A}
+.green{fill:#3B6D11}.blue{fill:#185FA5}.amber{fill:#854F0B}.foot{font-size:12px;fill:#5F5E5A}
+@media (prefers-color-scheme: dark){.bg{fill:#1F1F1E}.card{fill:#2C2C2A;stroke:#5F5E5A}.sep{stroke:#5F5E5A}
+.it{fill:#F1EFE8}.sub{fill:#D3D1C7}.head{fill:#F1EFE8}.green{fill:#97C459}.blue{fill:#85B7EB}.amber{fill:#EF9F27}.foot{fill:#D3D1C7}}
+</style>
+<rect class="bg" x="0" y="0" width="960" height="700"/>
+<text class="head" x="24" y="34">CycleSense backlog through the software factory</text>
+<rect class="card" x="24" y="60" width="296" height="592" rx="12" stroke-width="0.8"/>
+<text class="head green" x="38" y="86">Delivered on a branch (3)</text>
+<line class="sep" x1="36" y1="104" x2="308" y2="104" stroke-width="0.8"/>
+<text class="it" x="38" y="124">Shared views leak per-entry</text>
+<text class="it" x="38" y="141">mood/symptoms/notes via timeEntries</text>
+<text class="sub" x="38" y="158">Tier 3, gates and reviews passed, $1.13.</text>
+<line class="sep" x1="36" y1="180" x2="308" y2="180" stroke-width="0.8"/>
+<text class="it" x="38" y="200">Fresh install waits ~90s on loading</text>
+<text class="it" x="38" y="217">screen before sign-in</text>
+<text class="sub" x="38" y="234">Tier 2, gates and reviews passed, $2.08.</text>
+<text class="sub" x="38" y="250">Needs a manual device check before merge.</text>
+<line class="sep" x1="36" y1="272" x2="308" y2="272" stroke-width="0.8"/>
+<text class="it" x="38" y="292">Apple Health writer saves days at UTC</text>
+<text class="it" x="38" y="309">midnight</text>
+<text class="sub" x="38" y="326">Tier 2, gates and reviews passed, $1.18.</text>
+<text class="sub" x="38" y="342">Needs a manual device check before merge.</text>
+<rect class="card" x="336" y="60" width="296" height="592" rx="12" stroke-width="0.8"/>
+<text class="head blue" x="350" y="86">In the pipeline (1)</text>
+<line class="sep" x1="348" y1="104" x2="620" y2="104" stroke-width="0.8"/>
+<text class="it" x="350" y="124">Discreet alternate app icon (needs on-</text>
+<text class="it" x="350" y="141">device testing)</text>
+<text class="sub" x="350" y="158">Triaged, waiting to run.</text>
+<rect class="card" x="648" y="60" width="296" height="592" rx="12" stroke-width="0.8"/>
+<text class="head amber" x="662" y="86">Parked for a human (5)</text>
+<line class="sep" x1="660" y1="104" x2="932" y2="104" stroke-width="0.8"/>
+<text class="it" x="662" y="124">Fix stale mobile jest suites</text>
+<text class="it" x="662" y="141">(AuthProvider, api) still mocking…</text>
+<text class="sub" x="662" y="158">Every acceptance criterion except the docs</text>
+<text class="sub" x="662" y="174">one means rewriting the existing test files</text>
+<text class="sub" x="662" y="190">`mobile/src/__tests__/AuthProvider.test.tsx…</text>
+<line class="sep" x1="660" y1="212" x2="932" y2="212" stroke-width="0.8"/>
+<text class="it" x="662" y="232">Serve /.well-known/assetlinks.json and</text>
+<text class="it" x="662" y="249">apple-app-site-association from…</text>
+<text class="sub" x="662" y="266">The Play app-signing key and upload key</text>
+<text class="sub" x="662" y="282">SHA-256 fingerprints and the iOS Team ID are</text>
+<text class="sub" x="662" y="298">values only a human can supply; they are no…</text>
+<line class="sep" x1="660" y1="320" x2="932" y2="320" stroke-width="0.8"/>
+<text class="it" x="662" y="340">Android manual/E2E testing +</text>
+<text class="it" x="662" y="357">documented repeatable test cases</text>
+<text class="sub" x="662" y="374">Running the app on an Android emulator and</text>
+<text class="sub" x="662" y="390">exercising screens is a manual device</text>
+<text class="sub" x="662" y="406">activity that requires a human-operated…</text>
+<line class="sep" x1="660" y1="428" x2="932" y2="428" stroke-width="0.8"/>
+<text class="it" x="662" y="448">Health Connect import only reads ~30</text>
+<text class="it" x="662" y="465">days of history</text>
+<text class="sub" x="662" y="482">The item asks the factory to choose between</text>
+<text class="sub" x="662" y="498">two paths: requesting a sensitive health-</text>
+<text class="sub" x="662" y="514">history permission (which needs a Play…</text>
+<line class="sep" x1="660" y1="536" x2="932" y2="536" stroke-width="0.8"/>
+<text class="it" x="662" y="556">Feelings tags (anxious, calm,</text>
+<text class="it" x="662" y="573">energetic…) beyond 1-5 mood</text>
+<text class="sub" x="662" y="590">The item is blocked on CycleSense-ecu (share</text>
+<text class="sub" x="662" y="606">leak fix), and share filtering of health-</text>
+<text class="sub" x="662" y="622">related feelings data is privacy-sensitive…</text>
+<text class="foot" x="24" y="682">9 work items from the beads tracker. Total model spend $4.55. Nothing merged: shadow mode.</text>
+</svg>

@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="680" viewBox="0 0 680 680" role="img">
+<title>Software factory pipeline as built</title>
+<desc>Work items flow from intake through triage, implementer, independent tester, deterministic gates and reviewers to delivery, with guardrails alongside each step.</desc>
+<style>
+text{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+.th{font-size:14px;font-weight:600}.ts{font-size:12px}
+.bg{fill:#FFFFFF}
+.p rect{fill:#EEEDFE;stroke:#534AB7}.p .th{fill:#3C3489}.p .ts{fill:#534AB7}
+.g rect{fill:#F1EFE8;stroke:#5F5E5A}.g .th{fill:#444441}.g .ts{fill:#5F5E5A}
+.t rect{fill:#E1F5EE;stroke:#0F6E56}.t .th{fill:#085041}.t .ts{fill:#0F6E56}
+.arr{stroke:#73726C;stroke-width:1.5;fill:none}.lead{stroke:#888780;stroke-width:0.8;stroke-dasharray:4 3}
+.lg{fill:#5F5E5A}.head{fill:#2C2C2A}
+@media (prefers-color-scheme: dark){
+.bg{fill:#1F1F1E}
+.p rect{fill:#3C3489;stroke:#AFA9EC}.p .th{fill:#EEEDFE}.p .ts{fill:#CECBF6}
+.g rect{fill:#444441;stroke:#B4B2A9}.g .th{fill:#F1EFE8}.g .ts{fill:#D3D1C7}
+.t rect{fill:#085041;stroke:#5DCAA5}.t .th{fill:#E1F5EE}.t .ts{fill:#9FE1CB}
+.arr{stroke:#B4B2A9}.lg{fill:#D3D1C7}.head{fill:#F1EFE8}}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="#73726C" stroke-width="1.5"/></marker></defs>
+<rect class="bg" x="0" y="0" width="680" height="680"/>
+<text class="th head" x="60" y="26">asf: agentic software factory, as built</text>
+<g class="g"><rect x="60" y="60" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="78.0" text-anchor="middle" dominant-baseline="central">Intake adapters</text>
+<text class="ts" x="190.0" y="98.0" text-anchor="middle" dominant-baseline="central">beads, GitHub, Slack, Sentry</text>
+</g>
+<g class="p"><rect x="60" y="140" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="158.0" text-anchor="middle" dominant-baseline="central">Triage</text>
+<text class="ts" x="190.0" y="178.0" text-anchor="middle" dominant-baseline="central">Cheap model sorts backlog</text>
+</g>
+<line class="arr" x1="190" y1="116" x2="190" y2="137" marker-end="url(#a)"/>
+<g class="p"><rect x="60" y="220" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="238.0" text-anchor="middle" dominant-baseline="central">Implementer</text>
+<text class="ts" x="190.0" y="258.0" text-anchor="middle" dominant-baseline="central">Writes the change in a sandbox</text>
+</g>
+<line class="arr" x1="190" y1="196" x2="190" y2="217" marker-end="url(#a)"/>
+<g class="p"><rect x="60" y="300" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="318.0" text-anchor="middle" dominant-baseline="central">Independent tester</text>
+<text class="ts" x="190.0" y="338.0" text-anchor="middle" dominant-baseline="central">Sees only the diff</text>
+</g>
+<line class="arr" x1="190" y1="276" x2="190" y2="297" marker-end="url(#a)"/>
+<g class="g"><rect x="60" y="380" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="398.0" text-anchor="middle" dominant-baseline="central">Deterministic gates</text>
+<text class="ts" x="190.0" y="418.0" text-anchor="middle" dominant-baseline="central">Tests, types, build, secrets</text>
+</g>
+<line class="arr" x1="190" y1="356" x2="190" y2="377" marker-end="url(#a)"/>
+<g class="p"><rect x="60" y="460" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="478.0" text-anchor="middle" dominant-baseline="central">Reviewer and security</text>
+<text class="ts" x="190.0" y="498.0" text-anchor="middle" dominant-baseline="central">Cold read of the diff</text>
+</g>
+<line class="arr" x1="190" y1="436" x2="190" y2="457" marker-end="url(#a)"/>
+<g class="g"><rect x="60" y="540" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="190.0" y="558.0" text-anchor="middle" dominant-baseline="central">Deliver</text>
+<text class="ts" x="190.0" y="578.0" text-anchor="middle" dominant-baseline="central">Local branch or draft PR</text>
+</g>
+<line class="arr" x1="190" y1="516" x2="190" y2="537" marker-end="url(#a)"/>
+<g class="t"><rect x="380" y="140" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="510.0" y="158.0" text-anchor="middle" dominant-baseline="central">Parks items for a human</text>
+<text class="ts" x="510.0" y="178.0" text-anchor="middle" dominant-baseline="central">Missing info or decisions</text>
+</g>
+<g class="t"><rect x="380" y="220" width="260" height="136" rx="8" stroke-width="0.8"/>
+<text class="th" x="510.0" y="268.0" text-anchor="middle" dominant-baseline="central">Tool broker</text>
+<text class="ts" x="510.0" y="288.0" text-anchor="middle" dominant-baseline="central">Checks and logs every call</text>
+<text class="ts" x="510.0" y="308.0" text-anchor="middle" dominant-baseline="central">No secrets, no protected files</text>
+</g>
+<g class="t"><rect x="380" y="380" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="510.0" y="398.0" text-anchor="middle" dominant-baseline="central">Base-commit compare</text>
+<text class="ts" x="510.0" y="418.0" text-anchor="middle" dominant-baseline="central">Old failures not blamed</text>
+</g>
+<g class="t"><rect x="380" y="460" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="510.0" y="478.0" text-anchor="middle" dominant-baseline="central">Fix rounds</text>
+<text class="ts" x="510.0" y="498.0" text-anchor="middle" dominant-baseline="central">Findings go back once</text>
+</g>
+<g class="t"><rect x="380" y="540" width="260" height="56" rx="8" stroke-width="0.8"/>
+<text class="th" x="510.0" y="558.0" text-anchor="middle" dominant-baseline="central">factory.yaml policy</text>
+<text class="ts" x="510.0" y="578.0" text-anchor="middle" dominant-baseline="central">Shadow mode: nothing merges</text>
+</g>
+<line class="lead" x1="322" y1="168" x2="378" y2="168"/>
+<line class="lead" x1="322" y1="248" x2="378" y2="248"/>
+<line class="lead" x1="322" y1="328" x2="378" y2="328"/>
+<line class="lead" x1="322" y1="408" x2="378" y2="408"/>
+<line class="lead" x1="322" y1="488" x2="378" y2="488"/>
+<line class="lead" x1="322" y1="568" x2="378" y2="568"/>
+<g class="p"><rect x="60" y="628" width="14" height="14" rx="3" stroke-width="0.8"/></g><text class="ts lg" x="82" y="635" dominant-baseline="central">Agent step</text>
+<g class="g"><rect x="180" y="628" width="14" height="14" rx="3" stroke-width="0.8"/></g><text class="ts lg" x="202" y="635" dominant-baseline="central">System step</text>
+<g class="t"><rect x="310" y="628" width="14" height="14" rx="3" stroke-width="0.8"/></g><text class="ts lg" x="332" y="635" dominant-baseline="central">Guardrail</text>
+</svg>

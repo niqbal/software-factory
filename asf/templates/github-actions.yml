@@ -1,0 +1,58 @@
+# Software factory running inside GitHub Actions: zero infrastructure.
+# The runner VM is the sandbox. Label an issue "$label" (or dispatch manually)
+# and the factory triages it, implements it on a branch, runs the gates and
+# reviewers, and opens a draft pull request with the report.
+#
+# Required repository secret: ANTHROPIC_API_KEY
+name: software-factory
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to run through the factory
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: factory-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  factory:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == '$label'
+    runs-on: ubuntu-latest
+    timeout-minutes: $timeout
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+$setup_steps
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the factory
+        run: $install
+      - name: Run the factory on the issue
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          ASF_HOME: ${{ runner.temp }}/asf
+        run: |
+          git config user.name "software-factory[bot]"
+          git config user.email "software-factory@users.noreply.github.com"
+          asf --repo . --set delivery.provider=github --set intake.github_issues.enabled=true \
+            intake --source github_issues --id "${{ github.event.issue.number || inputs.issue }}"
+          asf --repo . --set delivery.provider=github run --all
+      - name: Keep the event log and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-${{ github.event.issue.number || inputs.issue }}
+          path: ${{ runner.temp }}/asf

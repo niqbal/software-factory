@@ -453,3 +453,32 @@ Each step has an exit criterion from the metrics table, not a date.
   only at tier 2 and above where the token cost is justified?
 - What is the minimum viable self-hosted footprint: can the control plane run as a
   single container with SQLite for a 5-person team?
+
+---
+
+## 16. Implementation status (2026-11-03)
+
+A working implementation lives in [ventures/software-factory](../../ventures/software-factory/README.md)
+as the `asf` Python package. Its README maps each component above to code and states
+what is live-tested, unit-tested only, or not built.
+
+Deviations from this design, chosen to keep the zero-infrastructure path real:
+
+- **SQLite instead of Temporal and Postgres.** The orchestrator is a resumable state machine
+  that writes state after every step. The store interface is small enough to swap.
+- **Triage instead of a task-graph planner.** Epics and items that need missing information
+  or decisions are parked for a human with a reason, rather than decomposed.
+- **Context from instruction files and a repository map.** There is no embedding index or
+  per-repo memory yet.
+- **One model provider.** The interface is provider-neutral, and Anthropic is the only adapter.
+  Server-side refusal fallbacks stand in for cross-provider failover.
+
+Lessons that changed the design during the build:
+
+- **Gates must compare against the base commit.** Real repositories often have failing tests
+  or type errors on main. Without the comparison the factory blames every change for them.
+- **"Needs a device check" is not "not automatable".** Triage now separates the code change
+  from manual verification. Items that need manual checks are still built, but can never be
+  agent-merged, and the PR carries the checklist.
+- **Retries start from a clean sandbox.** Leftover edits from a failed attempt confuse the
+  implementer's account of what it changed.
