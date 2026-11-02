@@ -1,0 +1,148 @@
+# factory.yaml
+# Lives at the repository root. Drafted by the setup agent on install,
+# then owned and edited by the team through normal PRs.
+# Every change to this file is itself a reviewable diff of the trust boundary.
+
+version: 1
+
+repo:
+  default_branch: main
+  language: typescript          # detected
+  package_manager: pnpm         # detected
+  test: pnpm test               # detected from package.json
+  build: pnpm build
+  lint: pnpm lint
+
+# Where work comes from. Enable only what the team already uses.
+intake:
+  github_issues:
+    enabled: true
+    trigger: label            # label | assign | both
+    label: factory
+  linear:
+    enabled: true
+    team: ENG
+    trigger_state: "Ready for agent"
+  jira:
+    enabled: false
+  slack:
+    enabled: true
+    channel: "#eng-factory"
+    command: /factory
+  sentry:
+    enabled: true
+    project: web-app
+    min_events_per_hour: 20     # below this, do not open a job
+    default_tier: 2
+  pagerduty:
+    enabled: false
+
+# Where agents run. "ci" uses the company's own runners and needs no infra.
+execution:
+  provider: ci                  # ci | hosted | self_hosted
+  ci:
+    system: github_actions
+    workflow: .github/workflows/factory-sandbox.yml   # generated on install
+    runner: ubuntu-latest
+  egress_allow:
+    - github.com
+    - registry.npmjs.org
+    - api.factory.example       # model router + control plane
+
+# Model routing. Bring your own keys so spend shows on your bill.
+models:
+  provider_keys: tenant         # tenant | factory
+  roles:
+    implementer: anthropic/claude-opus-5-5
+    tester:      anthropic/claude-opus-5-5
+    reviewer:    openai/gpt-5.5          # different family from the implementer
+    security:    anthropic/claude-sonnet-5-5
+    triage:      anthropic/claude-haiku-5-5
+  failover:
+    - google/gemini-3-pro
+  prompt_cache: true
+
+# Risk tiers. Path rules win over the classifier. A human can override with a PR label.
+tiers:
+  rules:
+    - paths: ["docs/**", "**/*.md", "CHANGELOG*"]
+      tier: 0
+    - paths: ["**/*.test.*", "**/__tests__/**", "pnpm-lock.yaml"]
+      tier: 1
+    - paths: ["src/auth/**", "src/billing/**", "migrations/**",
+              "infra/**", ".github/**", "factory.yaml"]
+      tier: 3
+  classifier_default: 2
+  override_label_prefix: "tier:"
+
+# Gates per tier. Deterministic gates always run before LLM gates.
+gates:
+  tier_0:
+    deterministic: [lint, build]
+    llm: []
+    human_approvals: 0
+    merge: agent
+  tier_1:
+    deterministic: [lint, build, test, secret_scan]
+    llm: [reviewer]
+    human_approvals: 0
+    merge: agent
+  tier_2:
+    deterministic: [lint, build, test, secret_scan, coverage_delta, dependency_policy]
+    coverage_delta_min: -0.5     # percentage points
+    llm: [reviewer, security]
+    human_approvals: 1
+    merge: agent_after_approval
+  tier_3:
+    deterministic: [lint, build, test, secret_scan, coverage_delta,
+                    dependency_policy, migration_dry_run]
+    llm: [reviewer, security]
+    human_approvals: 1
+    approvers: ["@owner-handle"]
+    merge: human
+
+# Autonomy ramp. Shadow mode is on by default after install.
+autonomy:
+  shadow:
+    enabled: true
+    until: { days: 7, jobs: 10 }   # whichever comes first
+  max_merge_tier: 1                # raise this in a PR when ready
+
+# Budgets per tier. Exceeding any one pauses the job and posts to Slack.
+budgets:
+  tier_0: { tokens: 200000,  minutes: 10,  ci_minutes: 5 }
+  tier_1: { tokens: 1000000, minutes: 30,  ci_minutes: 15 }
+  tier_2: { tokens: 4000000, minutes: 120, ci_minutes: 45 }
+  tier_3: { tokens: 8000000, minutes: 240, ci_minutes: 90 }
+  monthly_cap_usd: 500
+
+# Deploy is merge-and-watch. The factory never holds cloud credentials.
+deploy:
+  provider: vercel
+  preview_on_pr: true
+  production_branch: main
+  post_deploy_gate:
+    source: sentry
+    window_minutes: 30
+    max_new_issues: 0
+    error_rate_increase_max: 0.10
+
+# Agent-role permissions the tool broker enforces regardless of model output.
+permissions:
+  implementer:
+    may_edit_existing_tests: false     # true only at tier 0
+    may_edit_ci_config: false
+  tester:
+    may_delete_tests: false
+  ci_fixer:
+    max_files_touched: 5
+    max_retries: 1
+
+notifications:
+  slack_channel: "#eng-factory"
+  digest: weekly                       # daily | weekly | off
+  on: [job_paused, awaiting_approval, merged, deploy_gate_failed]
+
+kill_switch:
+  slack_command: "/factory pause-all"
+  repo_label: "factory:paused"
