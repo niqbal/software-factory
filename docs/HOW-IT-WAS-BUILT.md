@@ -2,7 +2,7 @@
 
 This is a worked example. It records how `asf` went from an interview question to a
 working factory, what broke along the way, and what happened when it was pointed at a real
-product backlog. The design is in [DESIGN.md](../../../designs/agentic-software-factory/DESIGN.md)
+product backlog. The design is in [DESIGN.md](../design/DESIGN.md)
 and the code map is in the [README](../README.md).
 
 ![The factory pipeline as built](images/factory-pipeline.svg)
@@ -151,9 +151,9 @@ refusal fallback at the requested model's rate. No fallbacks happened in these r
 ## 6. Try it on another repository
 
 ```bash
-pip install -e ventures/software-factory
+pip install -e .
 asf --repo <path> init && asf --repo <path> --env-file <file with ANTHROPIC_API_KEY> doctor
 asf --repo <path> add --title "..." --accept "..."      # or enable an intake adapter
 asf --repo <path> run --all
-python ventures/software-factory/docs/render_backlog_svg.py ~/.asf/<repo-dir>/factory.db board.svg "<name>"
+python docs/render_backlog_svg.py ~/.asf/<repo-dir>/factory.db board.svg "<name>"
 ```

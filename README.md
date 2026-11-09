@@ -1,7 +1,7 @@
 # asf: Agentic Software Factory
 
 Work items in, verified branches and pull requests out. This is the implementation of
-[the design](../../designs/agentic-software-factory/DESIGN.md): agents do the engineering
+[the design](design/DESIGN.md): agents do the engineering
 labor inside sandboxes, deterministic gates and independent reviewers decide what is
 trustworthy, and a single `factory.yaml` that the team owns sets the trust boundary.
 
@@ -20,7 +20,7 @@ For a worked example of how the factory was built and what it did on a real back
 ## Quick start for a new repository
 
 ```bash
-pip install -e ventures/software-factory          # or: pip install asf
+pip install -e .                                   # or: pip install asf
 asf --repo ~/code/myapp init                       # drafts factory.yaml, commits it on branch factory/setup
 asf --repo ~/code/myapp --env-file .env doctor     # checks commands, adapters, credentials
 asf --repo ~/code/myapp intake                     # pulls ready work from the configured trackers

@@ -458,7 +458,7 @@ Each step has an exit criterion from the metrics table, not a date.
 
 ## 16. Implementation status (2026-11-03)
 
-A working implementation lives in [ventures/software-factory](../../ventures/software-factory/README.md)
+A working implementation lives in [this repository](../README.md)
 as the `asf` Python package. Its README maps each component above to code and states
 what is live-tested, unit-tested only, or not built.
 

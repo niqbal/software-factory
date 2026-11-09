@@ -1,7 +1,7 @@
 # factory.yaml
 # Lives at the repository root. Drafted by `asf init`, then owned and edited by the
 # team through normal pull requests. Agents cannot edit it.
-# Unset keys fall back to the safe defaults in ventures/software-factory/asf/config.py.
+# Unset keys fall back to the safe defaults in asf/config.py.
 
 version: 1
 

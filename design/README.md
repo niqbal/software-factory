@@ -7,7 +7,7 @@ toolchain and no platform team.
 |---|---|
 | [DESIGN.md](DESIGN.md) | Full design: goals, adapter model, onboarding flow, core services, risk tiers, security, deployment modes, cost, failure modes, trade-offs |
 | [factory.example.yaml](factory.example.yaml) | The single config file a company owns, in the schema the implementation accepts |
-| [ventures/software-factory](../../ventures/software-factory/README.md) | The working implementation (`asf`) |
+| [the repository root](../README.md) | The working implementation (`asf`) |
 
 ## The one-paragraph version
 
