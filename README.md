@@ -50,6 +50,7 @@ runs the whole factory inside GitHub Actions when an issue gets the `factory` la
 | `run [--job ID] [--all] [--stop-at STATE]` | Drives jobs through the state machine. Resumable after a crash. |
 | `status [JOB]`, `events JOB [--jsonl]`, `report` | Job list, full audit trail of every agent tool call, metrics. |
 | `approve` / `reject JOB` | Human approval for tiers that require it. |
+| `allow JOB PATH... --reason ...` | Human grant: lets one job edit named existing test files, which agents may not do above tier 0. Lifts only that rule; assertions still may not be removed, and the grant is logged and listed in the report. `--revoke` removes it. |
 | `resume JOB [--extra-usd N]`, `retry JOB` | Continue a budget-paused job, or re-enter a failed one from a clean sandbox. |
 | `revise JOB --note "..." [--notes-file F] [--extra-usd N]` | Send a delivered, unmerged job back with review notes. The implementer works on top of the delivered commit on the same branch, then the tester, gates and reviewers run again over the whole change, and one new commit is added. Each revision gets a fresh budget. Follow with `run --job JOB`. |
 | `publish JOB` | Push a delivered job's branch and open a draft pull request (the report, plus `Fixes #N` for GitHub issues). Works whatever `delivery.provider` is; later revisions of the job update the same PR. |
@@ -105,7 +106,9 @@ new adapter and a line in `factory.yaml`.
 - Commands run with a scrubbed environment: no API keys, tokens or cloud credentials are
   inherited. Secret-looking files cannot be read, and tool output is redacted.
 - `factory.yaml`, CI config and secret files are protected paths. Existing tests cannot be
-  edited or deleted above tier 0, and the tester role can write only test files.
+  edited or deleted above tier 0, and the tester role can write only test files. A human can
+  let one job edit named existing test files with `asf allow`; deleting them stays forbidden
+  and the test_integrity gate still fails if an edit removes assertions.
 - The local worktree sandbox does not block network access, and tests execute code the
   agent wrote. Use the Docker provider or a CI runner where that matters.
 

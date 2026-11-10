@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import policy
@@ -359,6 +359,63 @@ class Factory:
         pr["seen"] = sorted(set(pr.get("seen", [])) | set(ids))
         self.store.update_job(job_id, pr=pr)
 
+    def grant(self, job_id: str, paths: list[str], by: str, reason: str = "") -> list[str]:
+        """Let this job edit specific existing test files, which agents may not do above tier 0.
+
+        A grant lifts only that rule, only for these exact paths and only for this job. Secret
+        files, protected paths and dependency folders stay off limits, existing tests still
+        cannot be deleted, and the test_integrity gate still fails if an edit drops assertions.
+        """
+        job = self.store.job(job_id)
+        d = job["data"]
+        if job["state"] == "rejected" or d.get("merged") or d.get("outcome") == "merged":
+            raise ValueError(f"{job_id} is {'merged' if job['state'] != 'rejected' else 'rejected'}; "
+                             "grants apply only to jobs that can still change")
+        clean = [self._grant_path(p) for p in paths]
+        if not clean:
+            raise ValueError("name at least one file")
+        if not reason.strip():
+            raise ValueError("give a reason; it goes in the job's event log and report")
+        grants = [g for g in d.get("grants", []) if g["path"] not in clean]
+        grants += [{"path": p, "by": by, "reason": reason.strip(), "at": time.time()} for p in clean]
+        self.store.update_job(job_id, grants=grants)
+        self.store.event(job_id, "grant.add", "human", {"paths": clean, "by": by, "reason": reason.strip()})
+        return clean
+
+    def revoke(self, job_id: str, paths: list[str], by: str) -> list[str]:
+        job = self.store.job(job_id)
+        clean = [self._grant_path(p, must_exist=False) for p in paths]
+        before = job["data"].get("grants", [])
+        removed = [g["path"] for g in before if g["path"] in clean]
+        self.store.update_job(job_id, grants=[g for g in before if g["path"] not in clean])
+        self.store.event(job_id, "grant.revoke", "human", {"paths": removed, "by": by})
+        return removed
+
+    def _grant_path(self, path: str, must_exist: bool = True) -> str:
+        """A repository-relative path to an existing test file on the default branch."""
+        raw = path.strip()
+        if not raw or raw.startswith(("/", "~")):
+            raise ValueError(f"use a repository-relative path, got '{path}'")
+        parts = [p for p in PurePosixPath(raw).parts if p not in ("", ".")]
+        if not parts or ".." in parts or parts[0] == ".git":
+            raise ValueError(f"not a path inside the repository: {path}")
+        rel = "/".join(parts)
+        if any(ch in rel for ch in "*?["):
+            raise ValueError(f"grants name exact files, not patterns: {path}")
+        if not must_exist:
+            return rel
+        if not self.cfg.is_test_path(rel):
+            raise ValueError(f"{rel} is not a test path (tests.globs), so the existing-test rule does not "
+                             "apply to it and a grant would change nothing")
+        if not run(["git", "-C", str(self.repo), "cat-file", "-e", f"{self.cfg.default_branch}:{rel}"],
+                   shell=False).ok:
+            raise ValueError(f"{rel} does not exist on {self.cfg.default_branch}; new test files need no grant")
+        return rel
+
+    @staticmethod
+    def _grants(job: dict[str, Any]) -> list[str]:
+        return [g["path"] for g in job["data"].get("grants", [])]
+
     def _active_revision(self, job: dict[str, Any]) -> dict[str, Any] | None:
         """The revision in progress, if the job was sent back with `revise` and is not done yet."""
         revisions = job["data"].get("revisions") or []
@@ -404,7 +461,10 @@ class Factory:
     def _agent(self, job: dict[str, Any], role: str, task: str, tier: int) -> AgentResult:
         self._check_budget(job["id"])
         sb = self._sandbox(job)
-        broker = ToolBroker(sb, self.cfg, role, tier, self.store, job["id"])
+        grants = self._grants(job)
+        broker = ToolBroker(sb, self.cfg, role, tier, self.store, job["id"], grants=grants)
+        if grants:
+            task += _grant_note(role, grants)
         system = self.prompts(sb).system(role, tier)
         self.store.event(job["id"], "agent.start", role, {"tier": tier,
                                                           "model": self.cfg.role_model(role).get("model")})
@@ -501,7 +561,7 @@ class Factory:
         decision = policy.decide(self.cfg, tier, manual_checks=job["data"].get("manual_verification", []))
         runner = GateRunner(self.cfg, sb, tier, self.state_dir,
                             base_sandbox=lambda: self.sandboxes.base_checkout(sb.base_sha),
-                            log=self._log(job["id"]))
+                            log=self._log(job["id"]), grants=self._grants(job))
         results = runner.run(decision.deterministic)
         failed = [r for r in results if r.blocking]
         gate_rows = [r.__dict__ for r in results]
@@ -629,3 +689,14 @@ class Factory:
                 self._sandbox(job).destroy()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _grant_note(role: str, paths: list[str]) -> str:
+    listed = "\n".join(f"- {p}" for p in paths)
+    if role in ("reviewer", "security"):
+        return ("\n\nA human allowed this job to edit these existing test files, an exception to the "
+                "rule against editing existing tests. Check that the edits only serve the work and "
+                f"weaken nothing:\n{listed}")
+    return ("\n\nA human allowed this job to edit these existing test files, an exception to the rule "
+            "against editing existing tests. Edit them only as the work needs, and keep every "
+            f"assertion; the test_integrity gate fails if any are removed:\n{listed}")
