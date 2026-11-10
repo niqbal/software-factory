@@ -63,6 +63,8 @@ def run_agent(provider: ModelProvider, cfg: Config, role: str, system: str, task
     """
     spec = cfg.role_model(role)
     max_turns = max_turns or cfg.get(f"models.max_turns.{role}", 40)
+    if provider.owns_loop:
+        return _run_external(provider, spec, role, system, task, broker, charge, max_turns)
     conv = provider.conversation(spec["model"], system, broker.tools(), spec.get("effort", "medium"))
     conv.add_user(task)
     result = AgentResult(role=role, ok=False, summary="")
@@ -90,6 +92,43 @@ def run_agent(provider: ModelProvider, cfg: Config, role: str, system: str, task
             nudged = True
             continue
         break
+    return _collect(result, broker, role)
+
+
+NUDGE_TURNS = 5
+
+
+def _run_external(provider: ModelProvider, spec: dict[str, Any], role: str, system: str, task: str,
+                  broker: ToolBroker, charge: Any, max_turns: int) -> AgentResult:
+    """Run one role on a provider that owns the agent loop (for example Claude Code).
+
+    The provider calls back into ``broker.call`` for every tool, so the same checks apply.
+    Spend is charged after each invocation, and the remaining job budget is passed down
+    so the runtime itself stops at the cap instead of only being caught afterwards.
+    """
+    result = AgentResult(role=role, ok=False, summary="")
+    finisher = "submit_review" if role in ("reviewer", "security") else "finish"
+    remaining = getattr(charge, "remaining", None)
+    prompts = [(task, max_turns),
+               (f"You stopped without calling {finisher}. Call {finisher} now with your result.", NUDGE_TURNS)]
+    with provider.agent_session(spec["model"], system, broker.tools(), broker.call,
+                                spec.get("effort", "medium")) as session:
+        for prompt, turns in prompts:
+            run = session.send(prompt, turns, remaining() if remaining else None)
+            result.turns += run.turns
+            result.input_tokens += run.turn.usage.get("input", 0) + run.turn.usage.get("cache_read", 0)
+            result.output_tokens += run.turn.usage.get("output", 0)
+            result.cost_usd += run.turn.cost_usd
+            result.stop = run.stop
+            charge(role, run.turn)  # raises BudgetExceeded when the cap is hit
+            # Nudge only an agent that ended its turn on its own, as the factory's own loop
+            # does; one that ran out of turns or budget is not given more.
+            if broker.state.finished or run.stop != "success":
+                break
+    return _collect(result, broker, role)
+
+
+def _collect(result: AgentResult, broker: ToolBroker, role: str) -> AgentResult:
     result.data = dict(broker.state.result)
     result.data["files_touched"] = sorted(broker.state.touched)
     result.data["denials"] = broker.state.denials

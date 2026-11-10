@@ -52,8 +52,11 @@ execution:
   keep_sandboxes: false
 
 models:
-  provider: anthropic
+  provider: anthropic                     # anthropic (API) | claude_code (the claude CLI)
   api_key_env: ANTHROPIC_API_KEY          # bring your own key: spend shows on your bill
+  claude_code:                            # only read when provider is claude_code
+    auth: login                           # login: the CLI's sign-in (e.g. a subscription) | api_key
+    binary: ""                            # path to claude if not on PATH; or set ASF_CLAUDE_BIN
   roles:
     triage:      {model: claude-haiku-5-5, effort: low}
     implementer: {model: claude-opus-5-5, effort: high}

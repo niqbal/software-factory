@@ -49,6 +49,14 @@ DEFAULTS: dict[str, Any] = {
         },
         "fallbacks": "default",
         "prompt_cache": True,
+        # Used when provider is claude_code: agents run through the claude CLI, with its
+        # built-in tools off and only the broker's tools available.
+        "claude_code": {
+            "auth": "login",       # login: the CLI's own sign-in (e.g. a subscription); api_key: api_key_env
+            "binary": "",          # path to claude; default ASF_CLAUDE_BIN, then claude on PATH
+            "timeout_s": 3600,     # per invocation
+            "extra_args": [],
+        },
         "max_turns": {"implementer": 60, "tester": 40, "reviewer": 25, "security": 20, "ci_fixer": 30},
     },
     "tiers": {
