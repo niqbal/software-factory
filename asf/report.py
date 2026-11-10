@@ -55,6 +55,12 @@ def render_report(job: dict[str, Any], item: WorkItem, runs: list[dict[str, Any]
     lines += ["### Policy", "", f"- Merge mode for tier {job.get('tier')}: {decision.get('merge_mode')}",
               f"- Human approvals required: {decision.get('approvals_required')}",
               f"- Agent may merge: {decision.get('may_agent_merge')} ({decision.get('reason')})", ""]
+    grants = d.get("grants") or []
+    if grants:
+        lines += ["**Human grants.** Agents were allowed to edit these existing test files, "
+                  "which policy otherwise forbids at this tier:", ""]
+        lines += [f"- `{g['path']}`, allowed by {g.get('by', '?')}: {g.get('reason', '')}" for g in grants]
+        lines += [""]
     by_role: dict[str, float] = {}
     for r in runs:
         by_role[r["role"]] = by_role.get(r["role"], 0) + r["cost_usd"]

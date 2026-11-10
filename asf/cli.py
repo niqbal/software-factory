@@ -284,6 +284,22 @@ def cmd_revise(app: App) -> int:
     return 0
 
 
+def cmd_allow(app: App) -> int:
+    by = app.args.by or os.environ.get("USER", "human")
+    if app.args.revoke:
+        removed = app.factory.revoke(app.args.job, app.args.paths, by)
+        print(f"revoked for {app.args.job}: {', '.join(removed) or 'nothing (no matching grant)'}")
+        return 0
+    paths = app.factory.grant(app.args.job, app.args.paths, by, app.args.reason or "")
+    print(f"{app.args.job} may now edit: {', '.join(paths)}")
+    print("Only the existing-test rule is lifted. Assertions still may not be removed, and the grant "
+          "is listed in the job's report.")
+    job = app.store.job(app.args.job)
+    if job["state"] in ("needs_human", "failed"):
+        print(f"Next: asf retry {app.args.job}, then asf run --job {app.args.job}")
+    return 0
+
+
 def cmd_publish(app: App) -> int:
     res = app.factory.publish(app.args.job)
     print(f"{'updated' if res['updated'] else 'opened'} draft PR {res['url']} for {app.args.job}")
@@ -405,6 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--note", action="append", help="one revision note (repeatable)")
     s.add_argument("--notes-file", help="file with one note per line")
     s.add_argument("--extra-usd", type=float, default=0.0, help="budget on top of the tier cap")
+    s = sub.add_parser("allow", help="let one job edit named existing test files (human grant)")
+    s.add_argument("job")
+    s.add_argument("paths", nargs="+", help="repository-relative paths of existing test files")
+    s.add_argument("--reason", help="why; required when granting, recorded in the event log and report")
+    s.add_argument("--by", help="who grants it (default $USER)")
+    s.add_argument("--revoke", action="store_true", help="remove these grants instead")
     s = sub.add_parser("publish", help="push a delivered job's branch and open a draft pull request")
     s.add_argument("job")
     s = sub.add_parser("reviews", help="act on /revise comments on factory pull requests")
@@ -431,7 +453,8 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
         "status": cmd_status, "events": cmd_events, "report": cmd_report,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
-        "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "publish": cmd_publish,
+        "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "allow": cmd_allow,
+        "publish": cmd_publish,
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
         "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters,

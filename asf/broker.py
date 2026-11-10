@@ -61,8 +61,12 @@ class BrokerState:
 class ToolBroker:
     def __init__(self, sandbox: Sandbox, cfg: Config, role: str, tier: int,
                  store: Store | None = None, job_id: str = "",
-                 on_event: Callable[[str, dict], None] | None = None):
+                 on_event: Callable[[str, dict], None] | None = None,
+                 grants: list[str] | set[str] | None = None):
         self.sb, self.cfg, self.role, self.tier = sandbox, cfg, role, tier
+        # Existing test files a human allowed this job to edit (asf allow). A grant lifts only
+        # the existing-test rule for those exact paths; every other check still applies.
+        self.grants = set(grants or ())
         self.store, self.job_id = store, job_id
         self.on_event = on_event
         self.state = BrokerState()
@@ -131,9 +135,10 @@ class ToolBroker:
         if is_test and existed:
             if deleting:
                 raise Denied(f"deleting existing test {rel} is never allowed")
-            if not policy.may_edit_existing_tests(self.cfg, self.tier):
+            if not policy.may_edit_existing_tests(self.cfg, self.tier) and rel not in self.grants:
                 raise Denied(f"{rel} is an existing test; at tier {self.tier} agents add tests "
-                             "rather than edit existing ones")
+                             "rather than edit existing ones (a human can allow this file for this "
+                             "job with asf allow)")
         if self.role == "ci_fixer" and rel not in self.state.touched \
                 and len(self.state.touched) >= self.max_touch:
             raise Denied(f"ci_fixer may touch at most {self.max_touch} files")

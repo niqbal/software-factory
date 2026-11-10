@@ -84,8 +84,10 @@ DEP_PARSERS: dict[str, Callable[[str | None], set[str]]] = {
 class GateRunner:
     def __init__(self, cfg: Config, sandbox: Sandbox, tier: int, state_dir: Path,
                  base_sandbox: Callable[[], Sandbox] | None = None,
-                 log: Callable[[str, dict], None] | None = None):
+                 log: Callable[[str, dict], None] | None = None,
+                 grants: list[str] | set[str] | None = None):
         self.cfg, self.sb, self.tier, self.state_dir = cfg, sandbox, tier, state_dir
+        self.grants = set(grants or ())
         self.base_sandbox = base_sandbox
         self.log = log or (lambda *_: None)
         self.timeout = cfg.get("execution.command_timeout_s", 900)
@@ -133,9 +135,10 @@ class GateRunner:
             current = self.sb.root / path
             if not current.exists():
                 problems.append(f"deleted existing test {path}")
-            elif not may_edit:
+            elif not may_edit and path not in self.grants:
                 problems.append(f"modified existing test {path}")
             else:
+                # Allowed edits, by tier or by a human grant, may change a test but not weaken it.
                 removed = len(re.findall(r"\b(expect|assert|should)\b", base))
                 kept = len(re.findall(r"\b(expect|assert|should)\b", current.read_text(errors="replace")))
                 if kept < removed:
@@ -147,7 +150,9 @@ class GateRunner:
             problems.append("code changed but no tests were added or updated")
         if problems:
             return GateResult("test_integrity", "fail", "; ".join(problems))
-        return GateResult("test_integrity", "pass", f"{len(tests_changed)} test files added or extended")
+        granted = sorted(p for p in tests_changed if p in self.grants)
+        note = f"; edited under a human grant: {', '.join(granted)}" if granted else ""
+        return GateResult("test_integrity", "pass", f"{len(tests_changed)} test files added or extended{note}")
 
     def g_dependency_policy(self, changed: list[str], diff: str) -> GateResult:
         added: list[str] = []
