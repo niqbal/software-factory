@@ -49,7 +49,7 @@ def test_revise_adds_a_commit_on_the_same_branch(invoice_repo, state, store):
     convs = recording(prov)
 
     assert f.revise(job_id, [NOTE]) == "implementing"
-    assert f.run_job(job_id) == "done"
+    assert f.run_job(job_id) == "done", store.job(job_id)["data"].get("error")
 
     job = store.job(job_id)
     log = sh(invoice_repo, "git", "log", "--format=%H %s", f"main..{branch}").splitlines()
@@ -67,6 +67,8 @@ def test_revise_adds_a_commit_on_the_same_branch(invoice_repo, state, store):
     assert rev["commit"] == job["data"]["commit"] and rev["from_commit"] == first_commit
     report = open(job["data"]["report"]).read()
     assert "### Revisions" in report and NOTE in report
+    integrity = next(g for g in job["data"]["gates"] if g["name"] == "test_integrity")
+    assert "job tests: 3\u21924 cases" in integrity["detail"], integrity["detail"]
     assert any(e["type"] == "job.revise" for e in store.events(job_id))
     # The user's checkout is untouched.
     assert sh(invoice_repo, "git", "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
@@ -214,3 +216,15 @@ def test_run_refuses_to_start_without_model_key(invoice_repo, state, store):
     with pytest.raises(ValueError, match="credentials missing"):
         f.run_job(job_id)
     assert store.job(job_id)["state"] == "queued" and prov.log == []
+
+
+def test_revise_cannot_drop_tests_it_delivered(invoice_repo, state, store):
+    drop = [[{"name": "delete_file", "input": {"path": "tests/test_discount_edges.py"}}],
+            [{"name": "finish", "input": {"summary": "Removed the edge tests."}}]]
+    tester_ok = [[{"name": "finish", "input": {"summary": "Fine.", "tests_pass": True}}]]
+    f, _, job_id = delivered(invoice_repo, state, store, implementer=[IMPL, drop],
+                             tester=[TESTER, tester_ok])
+    f.revise(job_id, [NOTE])
+    assert f.run_job(job_id) == "needs_human"
+    reason = store.job(job_id)["data"]["needs_human_reason"]
+    assert "job tests: 3\u21921 cases" in reason and "test_full, test_zero" in reason, reason

@@ -499,9 +499,11 @@ class Factory:
         changed = sb.changed_files()
         tier = policy.final_tier(self.cfg, item, job["data"].get("pre_tier", 2), changed)
         decision = policy.decide(self.cfg, tier, manual_checks=job["data"].get("manual_verification", []))
+        revision = self._active_revision(job)
         runner = GateRunner(self.cfg, sb, tier, self.state_dir,
                             base_sandbox=lambda: self.sandboxes.base_checkout(sb.base_sha),
-                            log=self._log(job["id"]))
+                            log=self._log(job["id"]),
+                            revision_base=revision["from_commit"] if revision else None)
         results = runner.run(decision.deterministic)
         failed = [r for r in results if r.blocking]
         gate_rows = [r.__dict__ for r in results]
