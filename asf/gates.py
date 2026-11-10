@@ -23,6 +23,10 @@ LOCKFILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", 
 CODE_EXT = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".kt",
             ".rb", ".php", ".cs", ".swift", ".scala", ".c", ".cc", ".cpp", ".h"}
 COMMAND_GATES = ("lint", "typecheck", "build", "test")
+ASSERT_RE = re.compile(r"\b(expect|assert|should)\b")  # same pattern as test_integrity's per-file check
+# A test case and its name: it("...") / test("...") in JS/TS, def test_x in Python.
+CASE_RE = re.compile(r"""\b(?:it|test)(?:\.(?:only|skip|todo|concurrent))?\s*\(\s*(['"`])(.+?)\1"""
+                     r"|^\s*(?:async\s+)?def\s+(test_\w+)", re.M)
 
 FAIL_PATTERNS = [
     re.compile(r"^\s*FAIL\s+(\S+)", re.M),                          # jest / vitest file
@@ -84,8 +88,10 @@ DEP_PARSERS: dict[str, Callable[[str | None], set[str]]] = {
 class GateRunner:
     def __init__(self, cfg: Config, sandbox: Sandbox, tier: int, state_dir: Path,
                  base_sandbox: Callable[[], Sandbox] | None = None,
-                 log: Callable[[str, dict], None] | None = None):
+                 log: Callable[[str, dict], None] | None = None,
+                 revision_base: str | None = None):
         self.cfg, self.sb, self.tier, self.state_dir = cfg, sandbox, tier, state_dir
+        self.revision_base = revision_base  # delivered tip while `asf revise` is in progress
         self.base_sandbox = base_sandbox
         self.log = log or (lambda *_: None)
         self.timeout = cfg.get("execution.command_timeout_s", 900)
@@ -145,9 +151,58 @@ class GateRunner:
         if (self.cfg.get("limits.require_tests_for_code_changes", True) and self.tier >= 1
                 and code_changed and not tests_changed):
             problems.append("code changed but no tests were added or updated")
+        job_note = self._job_tests_since_revision_base(changed, problems)
         if problems:
             return GateResult("test_integrity", "fail", "; ".join(problems))
-        return GateResult("test_integrity", "pass", f"{len(tests_changed)} test files added or extended")
+        return GateResult("test_integrity", "pass",
+                          f"{len(tests_changed)} test files added or extended{job_note}")
+
+    def _job_tests(self, paths: list[str], read: Callable[[str], str | None]) -> tuple[set[str], int, int]:
+        """The tests this job added on top of the base: distinct case names, raw cases, assertions."""
+        names: set[str] = set()
+        raw = asserts = 0
+        for path in paths:
+            if not (self.cfg.is_test_path(path) and is_code(path)):  # skip fixtures, caches, snapshots
+                continue
+            text, base = read(path), self.sb.file_at_base(path)
+            if text is None:
+                continue
+            cases = [m.group(2) or m.group(3) for m in CASE_RE.finditer(text)]
+            base_cases = {m.group(2) or m.group(3) for m in CASE_RE.finditer(base or "")}
+            names |= set(cases) - base_cases
+            raw += max(0, len(cases) - len(CASE_RE.findall(base or "")))
+            asserts += max(0, len(ASSERT_RE.findall(text)) - len(ASSERT_RE.findall(base or "")))
+        return names, raw, asserts
+
+    def _job_tests_since_revision_base(self, changed: list[str], problems: list[str]) -> str:
+        """During a revision, the tests the job delivered may be edited, merged or moved, not dropped.
+
+        Totals are compared over all of the job's tests (new test files, and cases it added to
+        existing ones), at the delivered tip and now, so cases moved between files still count.
+        Cases are counted by distinct name: merging duplicates is fine, losing a name's count is
+        not. Fewer assertions fail only if case names were also lost; otherwise they are reported.
+        """
+        if not self.revision_base:
+            return ""
+        rev = self.revision_base
+        before, raw_before, a_before = self._job_tests(
+            self.sb.changed_files_at(rev), lambda p: self.sb.file_at(rev, p))
+        if not raw_before:
+            return ""
+
+        def current(path: str) -> str | None:
+            f = self.sb.root / path
+            return f.read_text(errors="replace") if f.exists() else None
+        after, raw_after, a_after = self._job_tests(changed, current)
+        summary = (f"job tests: {raw_before}\u2192{raw_after} cases ({len(before)}\u2192{len(after)} distinct), "
+                   f"{a_before}\u2192{a_after} assertions")
+        missing = sorted(before - after)
+        if missing:
+            summary += f"; no longer present: {', '.join(missing[:5])}" + (" ..." if len(missing) > 5 else "")
+        if len(after) < len(before) or (missing and a_after < a_before):
+            problems.append(f"{summary} (cases delivered in an earlier revision were dropped)")
+            return ""
+        return f"; {summary}"
 
     def g_dependency_policy(self, changed: list[str], diff: str) -> GateResult:
         added: list[str] = []

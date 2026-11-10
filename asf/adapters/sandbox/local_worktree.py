@@ -77,8 +77,15 @@ class WorktreeSandbox(Sandbox):
         return rows
 
     def file_at_base(self, path: str) -> str | None:
-        res = run(["git", "-C", str(self.root), "show", f"{self.base_sha}:{path}"], shell=False)
+        return self.file_at(self.base_sha, path)
+
+    def file_at(self, rev: str, path: str) -> str | None:
+        res = run(["git", "-C", str(self.root), "show", f"{rev}:{path}"], shell=False)
         return res.stdout if res.ok else None
+
+    def changed_files_at(self, rev: str) -> list[str]:
+        out = self._git("diff", "--name-only", self.base_sha, rev, *self._pathspec)
+        return sorted({line.strip() for line in out.splitlines() if line.strip()})
 
     def commit(self, message: str) -> str:
         self._git("add", "-A", *self._pathspec)

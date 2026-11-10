@@ -101,6 +101,14 @@ class Sandbox(ABC):
         """Files changed since the branch tip (work not yet committed)."""
         raise NotImplementedError
 
+    def file_at(self, rev: str, path: str) -> str | None:
+        """A file's content at a commit on this branch, or None if it did not exist there."""
+        raise NotImplementedError
+
+    def changed_files_at(self, rev: str) -> list[str]:
+        """Files that differ between the base commit and `rev` (a commit on this branch)."""
+        raise NotImplementedError
+
     def describe(self) -> dict[str, Any]:
         return {"root": str(self.root), "branch": self.branch, "base_sha": self.base_sha}
 

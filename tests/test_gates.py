@@ -57,3 +57,61 @@ def test_preexisting_failures_are_not_blamed(tmp_path, state):
     res = [r for r in GateRunner(cfg, sb, 2, state, base_sandbox=lambda: prov.base_checkout(sb.base_sha))
            .run(["test"]) if r.name == "test"][0]
     assert res.status == "fail" and "test_new2" in res.detail
+
+
+def _delivered_job_tests(tmp_path, state, files):
+    """A sandbox whose branch tip holds tests the job delivered in an earlier revision."""
+    repo = make_repo(tmp_path / "rev", {"m.py": "X = 1\n", "tests/test_old.py": "def test_old():\n    assert 1\n"})
+    cfg = load_cfg(invoice_config())
+    _, sb = make_sb(repo, state, cfg)
+    for rel, text in files.items():
+        (sb.root / rel).write_text(text)
+    return cfg, sb, sb.commit("delivered")
+
+
+def _case(name, n_asserts=1):
+    return f"def {name}():\n" + "    assert True\n" * n_asserts + "\n\n"
+
+
+def test_job_tests_merged_duplicates_pass(tmp_path, state):
+    cfg, sb, tip = _delivered_job_tests(tmp_path, state, {
+        "tests/test_a.py": _case("test_x") + _case("test_y"),
+        "tests/test_b.py": _case("test_x") + _case("test_z", 2)})
+    # Revision: fold test_b into test_a, dropping the duplicate test_x.
+    (sb.root / "tests" / "test_b.py").unlink()
+    (sb.root / "tests" / "test_a.py").write_text(_case("test_x") + _case("test_y") + _case("test_z", 2))
+    res = GateRunner(cfg, sb, 2, state, revision_base=tip).run(["test_integrity"])[0]
+    assert res.status == "pass", res.detail
+    assert "job tests: 4→3 cases (3→3 distinct), 5→4 assertions" in res.detail
+
+
+def test_job_tests_dropped_cases_fail(tmp_path, state):
+    cfg, sb, tip = _delivered_job_tests(tmp_path, state, {
+        "tests/test_a.py": _case("test_x"),
+        "tests/test_b.py": _case("test_w") + _case("test_z")})
+    (sb.root / "tests" / "test_b.py").unlink()
+    (sb.root / "tests" / "test_a.py").write_text(_case("test_x") + _case("test_more"))
+    res = GateRunner(cfg, sb, 2, state, revision_base=tip).run(["test_integrity"])[0]
+    assert res.status == "fail"
+    assert "3→2 cases (3→2 distinct)" in res.detail and "test_w, test_z" in res.detail
+    # Outside a revision the job's own files are simply new, as before.
+    assert GateRunner(cfg, sb, 2, state).run(["test_integrity"])[0].status == "pass"
+
+
+def test_job_tests_renamed_cases_need_their_assertions(tmp_path, state):
+    cfg, sb, tip = _delivered_job_tests(tmp_path, state, {"tests/test_a.py": _case("test_x", 3)})
+    (sb.root / "tests" / "test_a.py").write_text(_case("test_renamed", 3))
+    ok = GateRunner(cfg, sb, 2, state, revision_base=tip).run(["test_integrity"])[0]
+    assert ok.status == "pass" and "no longer present: test_x" in ok.detail
+    (sb.root / "tests" / "test_a.py").write_text(_case("test_renamed", 1))
+    weak = GateRunner(cfg, sb, 2, state, revision_base=tip).run(["test_integrity"])[0]
+    assert weak.status == "fail" and "3→1 assertions" in weak.detail
+
+
+def test_job_tests_revision_that_only_adds_passes(tmp_path, state):
+    cfg, sb, tip = _delivered_job_tests(tmp_path, state, {
+        "tests/test_a.py": _case("test_x"), "tests/test_b.py": _case("test_y")})
+    (sb.root / "tests" / "test_c.py").write_text(_case("test_new"))
+    (sb.root / "tests" / "test_a.py").write_text(_case("test_x", 2))
+    res = GateRunner(cfg, sb, 2, state, revision_base=tip).run(["test_integrity"])[0]
+    assert res.status == "pass" and "job tests: 2→3 cases" in res.detail, res.detail
