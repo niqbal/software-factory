@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -150,12 +151,36 @@ def cmd_doctor(app: App) -> int:
         except KeyError as e:
             check(False, "", str(e))
     key_env = cfg.get("models.api_key_env", "ANTHROPIC_API_KEY")
+    provider_kind = cfg.get("models.provider")
+    cc_auth = cfg.get("models.claude_code.auth", "login")
+    needs_key = provider_kind == "anthropic" or (provider_kind == "claude_code" and cc_auth == "api_key")
     check(bool(app.secret(key_env)), f"{key_env} available (value not shown)",
-          f"{key_env} not set; pass --env-file or export it", fatal=cfg.get("models.provider") == "anthropic")
+          f"{key_env} not set; pass --env-file or export it", fatal=needs_key)
+    if provider_kind == "claude_code":
+        _doctor_claude_code(cfg, cc_auth, check)
     print(f"  info  shadow mode {'on' if cfg.get('autonomy.shadow') else 'off'}, max merge tier "
           f"{cfg.get('autonomy.max_merge_tier')}, monthly cap ${cfg.get('budgets.monthly_cap_usd')}")
     print("healthy" if ok else "problems found")
     return 0 if ok else 1
+
+
+def _doctor_claude_code(cfg: Any, auth: str, check: Callable[..., None]) -> None:
+    from .adapters.models.claude_code_provider import AUTH_MODES, ClaudeCodeProvider, find_binary
+    from .util import run
+    check(auth in AUTH_MODES, f"claude_code auth: {auth}",
+          f"models.claude_code.auth must be one of {', '.join(AUTH_MODES)}, got {auth!r}")
+    binary = find_binary(cfg.get("models.claude_code", {}) or {})
+    check(bool(binary), f"claude CLI: {binary}",
+          "claude CLI not found; install Claude Code or set models.claude_code.binary (or ASF_CLAUDE_BIN)")
+    if not binary:
+        return
+    version = run([binary, "--version"], shell=False)
+    check(version.ok, f"claude version {version.stdout.strip()}", f"claude --version failed: {version.tail(300)}")
+    if auth == "login":
+        prov = ClaudeCodeProvider({"claude_code": cfg.get("models.claude_code", {}) or {}})
+        check(prov.signed_in(), "claude CLI is signed in",
+              f"claude CLI is not signed in; run `{shlex.quote(binary)} auth login` once, "
+              "or set models.claude_code.auth: api_key")
 
 
 def cmd_intake(app: App) -> int:

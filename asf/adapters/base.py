@@ -213,8 +213,40 @@ class Conversation(ABC):
     def step(self) -> ModelTurn: ...
 
 
+@dataclass
+class AgentRun:
+    """One invocation of a provider that runs its own agent loop."""
+    turn: ModelTurn       # usage and cost for the whole invocation
+    turns: int            # model turns the runtime took
+    stop: str             # "success", "error_max_turns", "error_max_budget_usd", ...
+    session_id: str = ""
+
+
+class AgentSession(ABC):
+    """An agent whose loop runs inside the provider, with tools served from the broker.
+
+    ``send`` runs the agent until it stops. Later calls continue the same session,
+    which is how the factory nudges an agent that stopped without finishing.
+    """
+
+    @abstractmethod
+    def send(self, prompt: str, max_turns: int, budget_usd: float | None = None) -> AgentRun: ...
+
+    def __enter__(self) -> "AgentSession":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        pass
+
+
 class ModelProvider(ABC):
     kind: str = ""
+    # True when the provider runs the agent loop itself (see ``agent_session``) instead of
+    # handing the factory one turn at a time through ``conversation``.
+    owns_loop: bool = False
 
     def __init__(self, settings: dict[str, Any], ctx: AdapterContext | None = None):
         self.settings = settings or {}
@@ -228,6 +260,12 @@ class ModelProvider(ABC):
     @abstractmethod
     def conversation(self, model: str, system: str, tools: list[ToolSpec],
                      effort: str = "medium", max_tokens: int = 16000) -> Conversation: ...
+
+    def agent_session(self, model: str, system: str, tools: list[ToolSpec],
+                      call_tool: Callable[[str, dict[str, Any]], tuple[str, bool]],
+                      effort: str = "medium") -> AgentSession:
+        """Start an agent whose every tool call goes through ``call_tool`` (the broker)."""
+        raise NotImplementedError(f"{self.kind or type(self).__name__} drives turns through conversation()")
 
     @abstractmethod
     def structured(self, model: str, system: str, prompt: str, schema: dict[str, Any],
@@ -268,6 +306,7 @@ BUILTIN: dict[str, dict[str, str]] = {
     },
     "models": {
         "anthropic": "asf.adapters.models.anthropic_provider:AnthropicProvider",
+        "claude_code": "asf.adapters.models.claude_code_provider:ClaudeCodeProvider",
         "scripted": "asf.adapters.models.scripted:ScriptedProvider",
     },
 }

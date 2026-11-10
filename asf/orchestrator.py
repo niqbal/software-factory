@@ -370,13 +370,25 @@ class Factory:
         def charge(role: str, turn: Any) -> None:
             self.store.record_run(job_id, role, turn.model, turn.usage, turn.cost_usd)
             self._check_budget(job_id)
+        # Providers that run their own loop are given what is left, so they stop at the cap.
+        charge.remaining = lambda: self._budget_left(job_id)  # type: ignore[attr-defined]
         return charge
+
+    def _job_cap(self, job: dict[str, Any]) -> tuple[int, dict[str, Any], float]:
+        tier = job["tier"] if job["tier"] is not None else job["data"].get("pre_tier", 2)
+        budget = self.cfg.budget_for(tier)
+        return tier, budget, budget.get("usd", 5.0) + job["data"].get("extra_budget_usd", 0)
+
+    def _budget_left(self, job_id: str) -> float:
+        """Dollars this job may still spend: the lower of its own cap and the monthly cap."""
+        _, _, cap = self._job_cap(self.store.job(job_id))
+        job_left = cap - self.store.job_cost(job_id)
+        month_left = self.cfg.get("budgets.monthly_cap_usd", 50) - self.store.spend_since(time.time() - MONTH)
+        return max(0.0, min(job_left, month_left))
 
     def _check_budget(self, job_id: str) -> None:
         job = self.store.job(job_id)
-        tier = job["tier"] if job["tier"] is not None else job["data"].get("pre_tier", 2)
-        budget = self.cfg.budget_for(tier)
-        cap = budget.get("usd", 5.0) + job["data"].get("extra_budget_usd", 0)
+        tier, budget, cap = self._job_cap(job)
         spent = self.store.job_cost(job_id)
         if spent > cap:
             raise BudgetExceeded(f"job spent ${spent:.2f} of ${cap:.2f} (tier {tier})")

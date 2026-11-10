@@ -83,7 +83,45 @@ override any config value (CI uses this to switch delivery to GitHub).
 | Delivery: GitHub PR, GitLab MR | `adapters/delivery/` | Built; GitHub unit-tested with a fake runner (open or update a PR, read PR comments, reply); GitLab not run live |
 | Notify: console, Slack webhook. Observe: Sentry post-deploy gate | `adapters/notify/`, `adapters/observe.py` | Built; Slack and Sentry not run live |
 | Models: Anthropic with caching, effort per role, refusal fallbacks | `adapters/models/anthropic_provider.py` | Live-tested |
+| Models: Claude Code CLI, broker tools served over MCP | `adapters/models/claude_code_provider.py`, `adapters/models/mcp_bridge.py` | Built; full pipeline tested with a stand-in CLI; real CLI checked to complete the MCP handshake; not yet run against a model |
 | Not built yet | | Planner task-graph decomposition (triage flags epics instead), embedding code index and per-repo memory, OpenAI and Google model adapters, hosted microVM sandboxes, dashboard UI |
+
+## Running agents through Claude Code instead of the API
+
+By default every agent calls the Claude API with `ANTHROPIC_API_KEY` and is billed per
+token. Set `models.provider: claude_code` to run each agent through the `claude` CLI instead,
+for example to use a Claude subscription the CLI is signed in with:
+
+```yaml
+models:
+  provider: claude_code
+  claude_code:
+    auth: login        # the CLI's own sign-in; or api_key to pass models.api_key_env
+    binary: ""         # path to claude if it is not on PATH (or set ASF_CLAUDE_BIN)
+```
+
+Claude Code runs its own agent loop, so the factory starts it headless with every built-in
+tool switched off (`--tools ""`) and serves the broker's tools to it over MCP from a
+loopback server that needs a per-agent token. Every read, edit and command still goes
+through the broker, so protected paths, test integrity, the command allowlist, secret
+redaction and the audit log apply unchanged. The CLI also runs with `--strict-mcp-config`,
+`--permission-mode dontAsk`, `--disable-slash-commands`, no settings sources (so no user
+hooks), and an empty working directory outside the sandbox.
+
+Differences from the API provider:
+
+- **Budgets.** The remaining job budget is passed as `--max-budget-usd`, and spend is
+  charged after each agent run rather than before each model turn. With `auth: login` the
+  cost the CLI reports is the API list-price equivalent, not money charged.
+- **Effort and turns** come from the same per-role settings. Prompt caching and refusal
+  fallbacks are managed by the CLI, so `prompt_cache` and `fallbacks` do not apply.
+- **Login mode** may still load your user-level memory file (`~/.claude/CLAUDE.md`) into the
+  agent's context. `auth: api_key` adds `--bare`, which skips it.
+- **Subscriptions** are rate limited and meant for a person's own use. Check the usage
+  limits and Anthropic's terms before running unattended work on one.
+
+`asf doctor` checks that the CLI is found, its version, and, in login mode, that it is
+signed in (`claude auth login` once on that machine).
 
 ## Adding an adapter
 
