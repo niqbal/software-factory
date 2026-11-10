@@ -109,6 +109,7 @@ def fake_gh(open_prs=None, comments=None, state="OPEN"):
         calls.append(args)
         if "--body-file" in args:
             bodies.append(open(args[args.index("--body-file") + 1]).read())
+        bodies.extend(open(a[len("body=@"):]).read() for a in args if a.startswith("body=@"))
         out = "{}"
         if args[:3] == ["gh", "pr", "create"]:
             out = "https://github.com/o/r/pull/5\n"
@@ -116,6 +117,8 @@ def fake_gh(open_prs=None, comments=None, state="OPEN"):
             out = json.dumps(open_prs or [])
         elif args[:3] == ["gh", "pr", "view"]:
             out = json.dumps({"state": state})
+        elif args[:2] == ["gh", "api"] and "PATCH" in args:
+            out = ""
         elif args[:2] == ["gh", "api"]:
             kind = "line" if "/pulls/" in args[2] and args[2].split("?")[0].endswith("/comments") else \
                 "review" if "/reviews" in args[2] else "comment"
@@ -146,7 +149,11 @@ def test_github_delivery_updates_the_open_pr_instead_of_opening_another(tmp_path
     assert out == {"kind": "github", "branch": "factory/x", "url": "https://github.com/o/r/pull/7",
                    "number": 7, "draft": True, "updated": True}
     assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
-    assert ["gh", "pr", "edit", "7"] == next(c for c in calls if c[:3] == ["gh", "pr", "edit"])[:4]
+    edit = next(c for c in calls if c[:2] == ["gh", "api"] and "PATCH" in c)
+    assert edit[:5] == ["gh", "api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/7"]
+    assert edit[5] == "-F" and edit[6].startswith("body=@")
+    assert not any(c[:3] == ["gh", "pr", "edit"] for c in calls)
+    assert bodies == ["new report"] or bodies[-1].startswith("new report")
     assert "Fixes" not in bodies[0], "only GitHub issues get a closing keyword"
 
 
