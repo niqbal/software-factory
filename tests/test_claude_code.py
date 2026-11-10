@@ -186,14 +186,24 @@ def test_agent_that_stops_without_finishing_is_resumed_once(invoice_repo, state,
     assert "without calling finish" in nudge["prompt"]
 
 
-def test_cli_that_is_not_signed_in_fails_the_job_with_the_reason(invoice_repo, state, store, fake_cli,
-                                                                 monkeypatch):
+def test_cli_that_is_not_signed_in_stops_before_any_work(invoice_repo, state, store, fake_cli, monkeypatch):
     fake_cli.script()
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "not_logged_in")
     f = cc_factory(invoice_repo, state, store, fake_cli.path)
     job_id, _ = f.submit(item())
+    with pytest.raises(ValueError, match="not signed in"):
+        f.run_job(job_id)
+    assert store.job(job_id)["state"] == "queued"
+    assert fake_cli.log() == []  # no agent was started
+
+
+def test_cli_error_mid_run_fails_the_job_with_the_reason(invoice_repo, state, store, fake_cli, monkeypatch):
+    fake_cli.script()
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "out_of_credit")
+    f = cc_factory(invoice_repo, state, store, fake_cli.path)
+    job_id, _ = f.submit(item())
     assert f.run_job(job_id) == "failed"
-    assert "Not logged in" in store.job(job_id)["data"]["error"]
+    assert "usage limit" in store.job(job_id)["data"]["error"]
 
 
 def test_api_key_auth_uses_bare_mode_and_passes_the_key(invoice_repo, state, store, fake_cli):
@@ -221,6 +231,18 @@ def test_missing_cli_gives_an_actionable_error(monkeypatch):
     prov = ClaudeCodeProvider({"claude_code": {"binary": ""}})
     with pytest.raises(ClaudeCodeError, match="models.claude_code.binary"):
         prov.structured("claude-haiku-5-5", "[role:triage]", "x", {"type": "object"})
+
+
+def test_credentials_problem_names_the_fix(monkeypatch, fake_cli):
+    monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.delenv("ASF_CLAUDE_BIN", raising=False)
+    assert "not found" in ClaudeCodeProvider({"claude_code": {}}).credentials_problem()
+    assert ClaudeCodeProvider({"claude_code": {"binary": str(fake_cli.path)}}).credentials_problem() is None
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "not_logged_in")
+    assert "auth login" in ClaudeCodeProvider({"claude_code": {"binary": str(fake_cli.path)}}).credentials_problem()
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    keyless = ClaudeCodeProvider({"claude_code": {"binary": str(fake_cli.path), "auth": "api_key"}})
+    assert "ANTHROPIC_API_KEY is not set" in keyless.credentials_problem()
 
 
 def test_binary_found_through_env(tmp_path, monkeypatch, fake_cli):

@@ -9,7 +9,8 @@ Environment:
   FAKE_CLAUDE_SCRIPT  JSON file: {"<role>": [[call, ...], ...], "structured": {...}}
                       Each inner list is one invocation; a resumed session takes the next.
   FAKE_CLAUDE_LOG     JSONL file: one record per invocation (argv, cwd, env, tool results).
-  FAKE_CLAUDE_MODE    "not_logged_in" to answer like a CLI that is not signed in.
+  FAKE_CLAUDE_MODE    "not_logged_in": `auth status` says signed out and runs fail as such;
+                      "out_of_credit": signed in, but every run ends in an error result.
 """
 
 import json
@@ -53,6 +54,10 @@ def result(subtype="success", text="done", turns=1, is_error=False, session="", 
 
 def main():
     argv = sys.argv[1:]
+    mode = os.environ.get("FAKE_CLAUDE_MODE", "")
+    if argv[:2] == ["auth", "status"]:
+        print(json.dumps({"loggedIn": mode != "not_logged_in", "authMethod": "claude.ai"}))
+        return
     prompt = sys.stdin.read()
     model = opt(argv, "--model", "")
     log = {"argv": argv, "cwd": os.getcwd(), "prompt": prompt,
@@ -61,8 +66,10 @@ def main():
     role = system.split("[role:", 1)[1].split("]", 1)[0] if "[role:" in system else "unknown"
     log["role"] = role
     try:
-        if os.environ.get("FAKE_CLAUDE_MODE") == "not_logged_in":
+        if mode == "not_logged_in":
             return result(text="Not logged in · Please run /login", is_error=True)
+        if mode == "out_of_credit":
+            return result(text="Claude usage limit reached", is_error=True)
         script = json.loads(Path(os.environ["FAKE_CLAUDE_SCRIPT"]).read_text())
         if "--json-schema" in argv:
             return result(structured=script.get("structured", {}).get(role, {}), model=model)

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -102,6 +103,32 @@ class ClaudeCodeProvider(ModelProvider):
         self.binary = find_binary(self.cc)
         # Seam for tests: replaces subprocess.run with the same signature.
         self.runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
+
+    # -------------------------------------------------------- credentials --
+    def signed_in(self) -> bool:
+        """Whether the CLI has its own sign-in, checked in the environment agents get."""
+        if not self.binary:
+            return False
+        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        try:
+            proc = self.runner([self.binary, "auth", "status"], capture_output=True, text=True,
+                               env=env, timeout=60)
+            return bool(json.loads(proc.stdout or "{}").get("loggedIn"))
+        except (subprocess.TimeoutExpired, OSError, ValueError, AttributeError):
+            return False
+
+    def credentials_problem(self) -> str | None:
+        if not self.binary:
+            return ("claude CLI not found; install Claude Code, or set models.claude_code.binary "
+                    "(or ASF_CLAUDE_BIN) to its path")
+        if self.auth == "api_key":
+            key_env = self.settings.get("api_key_env", "ANTHROPIC_API_KEY")
+            key = self.ctx.secrets(key_env) if self.ctx else os.environ.get(key_env)
+            return None if key else f"models.claude_code.auth is api_key but {key_env} is not set"
+        if not self.signed_in():
+            return (f"the claude CLI is not signed in; run `{shlex.quote(self.binary)} auth login` once, "
+                    "or set models.claude_code.auth: api_key")
+        return None
 
     # ------------------------------------------------------------ process --
     def _require_binary(self) -> str:

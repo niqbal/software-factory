@@ -165,7 +165,7 @@ def cmd_doctor(app: App) -> int:
 
 
 def _doctor_claude_code(cfg: Any, auth: str, check: Callable[..., None]) -> None:
-    from .adapters.models.claude_code_provider import AUTH_MODES, find_binary
+    from .adapters.models.claude_code_provider import AUTH_MODES, ClaudeCodeProvider, find_binary
     from .util import run
     check(auth in AUTH_MODES, f"claude_code auth: {auth}",
           f"models.claude_code.auth must be one of {', '.join(AUTH_MODES)}, got {auth!r}")
@@ -177,15 +177,10 @@ def _doctor_claude_code(cfg: Any, auth: str, check: Callable[..., None]) -> None
     version = run([binary, "--version"], shell=False)
     check(version.ok, f"claude version {version.stdout.strip()}", f"claude --version failed: {version.tail(300)}")
     if auth == "login":
-        # Same environment the agents get: without an API key, so the CLI's own sign-in shows.
-        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
-        status = run([binary, "auth", "status"], shell=False, env=env)
-        try:
-            logged_in = bool(json.loads(status.stdout).get("loggedIn"))
-        except ValueError:
-            logged_in = False
-        check(logged_in, "claude CLI is signed in",
-              f"claude CLI is not signed in; run `{shlex.quote(binary)} auth login` once, or set models.claude_code.auth: api_key")
+        prov = ClaudeCodeProvider({"claude_code": cfg.get("models.claude_code", {}) or {}})
+        check(prov.signed_in(), "claude CLI is signed in",
+              f"claude CLI is not signed in; run `{shlex.quote(binary)} auth login` once, "
+              "or set models.claude_code.auth: api_key")
 
 
 def cmd_intake(app: App) -> int:
