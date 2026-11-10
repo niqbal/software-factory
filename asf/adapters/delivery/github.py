@@ -68,7 +68,11 @@ class GitHubDelivery(DeliveryAdapter):
         body = pr_body(item, report_md)
         existing = self.open_pr(branch)
         if existing:
-            self._with_file(body, lambda p: ["gh", "pr", "edit", str(existing["number"]), "--body-file", p])
+            # REST rather than `gh pr edit`: older gh versions query classic Projects there, which
+            # GitHub has removed, so the edit fails even though nothing about projects is changed.
+            self._with_file(body, lambda p: ["gh", "api", "-X", "PATCH",
+                                             f"repos/{{owner}}/{{repo}}/pulls/{existing['number']}",
+                                             "-F", f"body=@{p}", "--silent"])
             url, number, updated = existing["url"], existing["number"], True
         else:
             def create(p: str) -> list[str]:

@@ -150,7 +150,7 @@ def test_revise_comment_on_the_pr_revises_and_replies(invoice_repo, state, store
     job = store.job(job_id)
     assert job["data"]["revisions"][0]["commit"]
     # The revision was delivered to the PR (push + body update), and the result posted as a comment.
-    assert any(c[:3] == ["gh", "pr", "edit"] for c in calls)
+    assert any(c[:2] == ["gh", "api"] and "PATCH" in c and c[4].endswith("/pulls/5") for c in calls)
     assert sum(1 for c in calls if c[:2] == ["git", "push"]) == 2
     assert "Revision 1" in bodies[-1] and "tests/test_discount.py:5" in bodies[-1]
     assert any(e["type"] == "pr.comment_ignored" for e in store.events(job_id))
