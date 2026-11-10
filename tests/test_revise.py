@@ -189,3 +189,28 @@ def test_publish_refuses_undelivered_jobs(invoice_repo, state, store):
     f.ctx.runner = fake_gh()[0]
     with pytest.raises(ValueError, match="only delivered"):
         f.publish(job_id)
+
+
+def test_missing_model_key_leaves_the_pr_comment_and_job_untouched(invoice_repo, state, store):
+    comments = {"comment": [owner(1, "comment", "/revise\nalso cover a 0% discount")]}
+    f, prov, job_id, calls, _ = published(invoice_repo, state, store, comments)
+    prov.credentials_problem = lambda: "ANTHROPIC_API_KEY is not set"
+    with pytest.raises(ValueError, match="credentials missing"):
+        f.reviews()
+    job = store.job(job_id)
+    assert job["state"] == "done" and job["data"]["pr"]["seen"] == [] and not job["data"].get("revisions")
+    assert not any(c[:3] == ["gh", "pr", "comment"] for c in calls)
+    # Once the key is there, the same comment is picked up.
+    prov.credentials_problem = lambda: None
+    [dry] = f.reviews(dry_run=True)
+    assert dry["action"] == "revise"
+
+
+def test_run_refuses_to_start_without_model_key(invoice_repo, state, store):
+    prov = provider()
+    prov.credentials_problem = lambda: "ANTHROPIC_API_KEY is not set"
+    f = factory(invoice_repo, state, store, prov)
+    job_id, _ = f.submit(item())
+    with pytest.raises(ValueError, match="credentials missing"):
+        f.run_job(job_id)
+    assert store.job(job_id)["state"] == "queued" and prov.log == []

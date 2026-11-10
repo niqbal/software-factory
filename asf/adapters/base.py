@@ -220,6 +220,11 @@ class ModelProvider(ABC):
         self.settings = settings or {}
         self.ctx = ctx
 
+    def credentials_problem(self) -> str | None:
+        """Why model calls would fail for lack of credentials, or None. Checked before work starts,
+        so a missing key stops a run cleanly instead of failing a job halfway."""
+        return None
+
     @abstractmethod
     def conversation(self, model: str, system: str, tools: list[ToolSpec],
                      effort: str = "medium", max_tokens: int = 16000) -> Conversation: ...

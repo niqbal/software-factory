@@ -125,7 +125,18 @@ class Factory:
         return jobs
 
     # ----------------------------------------------------------------- run ---
+    MODEL_STATES = {"queued", "implementing", "testing", "verifying", "reviewing"}
+
+    def require_model(self) -> None:
+        """Refuse to start model work without credentials (ValueError, nothing changed)."""
+        problem = self.provider.credentials_problem()
+        if problem:
+            raise ValueError(f"model credentials missing: {problem}")
+
     def run_job(self, job_id: str, stop_at: str | None = None) -> str:
+        if self.store.job(job_id)["state"] in self.MODEL_STATES and \
+                self.store.job(job_id)["state"] != stop_at:
+            self.require_model()
         while True:
             job = self.store.job(job_id)
             state = job["state"]
@@ -308,6 +319,9 @@ class Factory:
             actions.append(act)
             if dry_run:
                 continue
+            if job["state"] == "done" and notes:
+                # Before the comments are marked as handled: a missing key must leave them pending.
+                self.require_model()
             self._mark_seen(job["id"], [c["id"] for c in fresh])
             if job["state"] != "done":
                 gh.comment(number, f"The factory is still working on `{job['id']}` ({job['state']}); "

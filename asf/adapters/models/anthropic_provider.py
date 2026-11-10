@@ -6,6 +6,8 @@ adaptive thinking with per-role effort, and server-side refusal fallbacks.
 
 from __future__ import annotations
 
+import os
+
 import json
 from typing import Any
 
@@ -81,9 +83,17 @@ class AnthropicProvider(ModelProvider):
         super().__init__(settings, ctx)
         key_env = self.settings.get("api_key_env", "ANTHROPIC_API_KEY")
         key = ctx.secrets(key_env) if ctx else None
+        self._key_env = key_env
+        self._has_credentials = bool(key or os.environ.get("ANTHROPIC_API_KEY")
+                                     or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
         self.client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
         self.fallbacks = self.settings.get("fallbacks", "default")
         self.cache = self.settings.get("prompt_cache", True)
+
+    def credentials_problem(self) -> str | None:
+        if self._has_credentials:
+            return None
+        return f"{self._key_env} is not set; pass --env-file with it or export it"
 
     def create(self, *, model: str, effort: str, **kwargs: Any) -> Any:
         kwargs["output_config"] = {**kwargs.get("output_config", {}), "effort": effort}
