@@ -15,7 +15,9 @@ work item ─▶ triage ─▶ implementer ─▶ independent tester ─▶ dete
 ```
 
 For a worked example of how the factory was built and what it did on a real backlog, see
-[docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md).
+[docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md). For when to use Claude Code alone
+instead, and what the factory costs on the API, see
+[docs/CLAUDE-CODE-OR-THE-FACTORY.md](docs/CLAUDE-CODE-OR-THE-FACTORY.md).
 
 ## Quick start for a new repository
 
