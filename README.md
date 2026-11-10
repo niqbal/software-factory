@@ -51,6 +51,7 @@ runs the whole factory inside GitHub Actions when an issue gets the `factory` la
 | `status [JOB]`, `events JOB [--jsonl]`, `report` | Job list, full audit trail of every agent tool call, metrics. |
 | `approve` / `reject JOB` | Human approval for tiers that require it. |
 | `resume JOB [--extra-usd N]`, `retry JOB` | Continue a budget-paused job, or re-enter a failed one from a clean sandbox. |
+| `revise JOB --note "..." [--notes-file F] [--extra-usd N]` | Send a delivered, unmerged job back with review notes. The implementer works on top of the delivered commit on the same branch, then the tester, gates and reviewers run again over the whole change, and one new commit is added. Each revision gets a fresh budget. Follow with `run --job JOB`. |
 | `pause-all` / `resume-all` | Kill switch. A `PAUSED` file in the state directory works too. |
 | `serve [--worker]` | Webhook gateway with signature verification, job API, optional worker loop. |
 | `ci-workflow [--write]` | GitHub Actions workflow for runner mode. |

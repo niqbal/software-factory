@@ -15,7 +15,15 @@ def render_report(job: dict[str, Any], item: WorkItem, runs: list[dict[str, Any]
     lines = [f"## {item.title}", ""]
     src = f"{item.source_kind} `{item.external_id}`" + (f" ({item.url})" if item.url else "")
     lines += [f"Work item: {src}", f"Factory job: `{job['id']}`, risk tier **{job.get('tier')}**", ""]
-    lines += ["### Summary", "", (d.get("implementer") or "").strip() or "(no summary)", ""]
+    revisions = [rv for rv in d.get("revisions", []) if rv.get("commit")]
+    if revisions:
+        lines += ["### Revisions", ""]
+        for rv in revisions:
+            lines += [f"**Revision {rv['n']}** (`{rv['commit'][:10]}`), from review notes:", ""]
+            lines += [f"- {n}" for n in rv["notes"]]
+            lines += [""]
+    lines += ["### Summary" + (" of the latest revision" if revisions else ""), "",
+              (d.get("implementer") or "").strip() or "(no summary)", ""]
     acc = d.get("acceptance", [])
     met = set(d.get("acceptance_met", []))
     if acc:

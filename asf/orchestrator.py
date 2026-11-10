@@ -22,7 +22,7 @@ from .gates import GateRunner
 from .models import TERMINAL, AgentResult, GateResult, WorkItem
 from .report import render_report
 from .store import Store
-from .util import slugify
+from .util import git, run, slugify
 
 TRIAGE_SCHEMA = {
     "type": "object",
@@ -166,12 +166,67 @@ class Factory:
             raise ValueError(f"{job_id} is {job['state']}; only failed or needs_human jobs can be retried")
         target = job["data"].get("failed_state") or ("implementing" if job["data"].get("sandbox") else "queued")
         if target == "implementing" and job["data"].get("sandbox"):
-            # A fresh attempt starts from the base commit, not from a half-finished one.
-            self._sandbox(job).reset()
+            # A fresh attempt starts from the base commit, not from a half-finished one. During a
+            # revision the base is the delivered commit: the work already on the branch is kept.
+            revision = self._active_revision(job)
+            self._sandbox(job).reset(revision["from_commit"] if revision else None)
             self.store.event(job_id, "sandbox.reset", "factory", {"reason": "retry"})
         self.store.update_job(job_id, target, error="", needs_human_reason="", feedback="",
                               tester_rounds=0, review_rounds=0, ci_rounds=0)
         return target
+
+    def revise(self, job_id: str, notes: list[str], extra_usd: float = 0.0) -> str:
+        """Send a delivered, unmerged job back to the implementer with a reviewer's notes.
+
+        The job keeps its branch: the implementer works on top of the delivered commit, then
+        the tester, gates and reviewers run again over the whole change, and a new commit is
+        added to the same branch. Each revision gets a fresh budget.
+        """
+        notes = [n.strip() for n in notes if n and n.strip()]
+        if not notes:
+            raise ValueError("give at least one revision note")
+        job = self.store.job(job_id)
+        d = job["data"]
+        if job["state"] != "done" or d.get("merged") or d.get("outcome") == "merged":
+            raise ValueError(f"{job_id} is {job['state']}"
+                             + (" and merged" if d.get("merged") or d.get("outcome") == "merged" else "")
+                             + "; only delivered, unmerged jobs can be revised")
+        branch = d.get("branch")
+        if not branch or not git(self.repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}",
+                                 check=False).strip():
+            raise ValueError(f"{job_id}: branch {branch or '(none)'} no longer exists")
+        tip = git(self.repo, "rev-parse", f"refs/heads/{branch}").strip()
+        if run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", tip, self.cfg.default_branch],
+               shell=False).ok:
+            raise ValueError(f"{branch} is already merged into {self.cfg.default_branch}; "
+                             "open a new work item for further changes")
+        checked_out = [line.split(" ", 1)[1] for line in
+                       git(self.repo, "worktree", "list", "--porcelain").splitlines()
+                       if line.startswith("worktree ")]
+        sandbox_root = (d.get("sandbox") or {}).get("root")
+        for wt in checked_out:
+            if wt != sandbox_root and git(Path(wt), "rev-parse", "--abbrev-ref", "HEAD",
+                                          check=False).strip() == branch:
+                raise ValueError(f"{branch} is checked out in {wt}; switch that checkout to another "
+                                 "branch first so the factory can work on it")
+        revisions = list(d.get("revisions", []))
+        revisions.append({"n": len(revisions) + 1, "notes": notes, "from_commit": tip,
+                          "requested_at": time.time(), "cost_before": round(self.store.job_cost(job_id), 4)})
+        # Fresh budget for this revision: the tier's cap applies to new spend only.
+        extra = self.store.job_cost(job_id) + extra_usd
+        self.store.update_job(job_id, "implementing", revisions=revisions, started=time.time(),
+                              extra_budget_usd=round(extra, 4),
+                              feedback="", error="", needs_human_reason="", outcome="",
+                              tester_rounds=0, review_rounds=0, ci_rounds=0)
+        self.store.event(job_id, "job.revise", "human", {"revision": len(revisions), "notes": notes,
+                                                         "from_commit": tip})
+        return "implementing"
+
+    def _active_revision(self, job: dict[str, Any]) -> dict[str, Any] | None:
+        """The revision in progress, if the job was sent back with `revise` and is not done yet."""
+        revisions = job["data"].get("revisions") or []
+        return revisions[-1] if revisions and job["state"] != "done" and not revisions[-1].get("commit") \
+            else None
 
     # -------------------------------------------------------------- budgets --
     def _charger(self, job_id: str) -> Callable[[str, Any], None]:
@@ -259,6 +314,12 @@ class Factory:
     def _task(self, job: dict[str, Any], extra: str = "") -> str:
         item = self._item(job)
         text = work_item_block(item, job["data"].get("acceptance", []))
+        revision = self._active_revision(job)
+        if revision:
+            text += ("\n\nThis change was already delivered on this branch; the working tree contains it. "
+                     "A human reviewed it and asked for revisions. Keep what is right, change only what "
+                     "the notes ask for, and do not start over:\n"
+                     + "\n".join(f"- {n}" for n in revision["notes"]))
         feedback = job["data"].get("feedback")
         if feedback:
             text += "\n\nThe previous attempt needs changes. Address these findings:\n" + feedback
@@ -269,7 +330,9 @@ class Factory:
         res = self._agent(job, "implementer", self._task(job), tier)
         if res.data.get("blocked_reason"):
             return self._needs_human(job, f"implementer blocked: {res.data['blocked_reason']}")
-        if not self._sandbox(job).changed_files():
+        sb = self._sandbox(job)
+        changed = sb.uncommitted_files() if self._active_revision(job) else sb.changed_files()
+        if not changed:
             return self._needs_human(job, f"implementer made no changes: {res.summary[:500]}")
         self.store.update_job(job["id"], "testing", implementer=res.summary, feedback="",
                               acceptance_met=res.data.get("acceptance_met", []))
@@ -279,6 +342,10 @@ class Factory:
         item = self._item(job)
         task = (work_item_block(item, job["data"].get("acceptance", []))
                 + "\n\nThe implementation is in the working tree. Read it with show_diff.")
+        revision = self._active_revision(job)
+        if revision:
+            task += ("\n\nThis is a revision of a delivered change. Also check these review notes "
+                     "were addressed:\n" + "\n".join(f"- {n}" for n in revision["notes"]))
         res = self._agent(job, "tester", task, tier)
         rounds = job["data"].get("tester_rounds", 0)
         defect = res.data.get("defect_found")
@@ -352,10 +419,17 @@ class Factory:
     def _s_committing(self, job: dict[str, Any]) -> None:
         sb = self._sandbox(job)
         item = self._item(job)
-        title = f"{item.title}"
+        revision = self._active_revision(job)
+        title = f"Revise: {item.title}" if revision else f"{item.title}"
+        body = ("\n\nReview notes addressed:\n" + "\n".join(f"- {n}" for n in revision["notes"])) \
+            if revision else ""
         trailer = (f"\n\nFactory-Job: {job['id']}\nWork-Item: {item.source_kind}:{item.external_id}"
-                   f"\nRisk-Tier: {job['tier']}")
-        sha = sb.commit(f"{title}{trailer}")
+                   f"\nRisk-Tier: {job['tier']}" + (f"\nRevision: {revision['n']}" if revision else ""))
+        sha = sb.commit(f"{title}{body}{trailer}")
+        if revision:
+            revisions = job["data"]["revisions"]
+            revisions[-1] = {**revision, "commit": sha, "summary": job["data"].get("implementer", "")}
+            self.store.update_job(job["id"], revisions=revisions)
         job = self.store.job(job["id"])
         report = render_report(job, item, self.store.runs(job["id"]), self.store.job_cost(job["id"]))
         path = self.state_dir / "reports" / f"{job['id']}.md"

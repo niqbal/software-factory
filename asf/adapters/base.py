@@ -93,8 +93,12 @@ class Sandbox(ABC):
     @abstractmethod
     def destroy(self) -> None: ...
 
-    def reset(self) -> None:
-        """Discard all changes and return to the base commit."""
+    def reset(self, to: str | None = None) -> None:
+        """Discard all changes and return to `to` (default: the base commit)."""
+        raise NotImplementedError
+
+    def uncommitted_files(self) -> list[str]:
+        """Files changed since the branch tip (work not yet committed)."""
         raise NotImplementedError
 
     def describe(self) -> dict[str, Any]:

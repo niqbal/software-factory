@@ -88,9 +88,14 @@ class WorktreeSandbox(Sandbox):
             raise RuntimeError(res.tail(2000))
         return self._git("rev-parse", "HEAD").strip()
 
-    def reset(self) -> None:
-        self._git("reset", "-q", "--hard", self.base_sha)
+    def reset(self, to: str | None = None) -> None:
+        self._git("reset", "-q", "--hard", to or self.base_sha)
         self._git("clean", "-fdq", *self._pathspec)
+
+    def uncommitted_files(self) -> list[str]:
+        self._stage_intent()
+        out = self._git("diff", "--name-only", "HEAD", *self._pathspec)
+        return sorted({line.strip() for line in out.splitlines() if line.strip()})
 
     def destroy(self) -> None:
         git(self.repo, "worktree", "remove", "--force", str(self.root), check=False)
