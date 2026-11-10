@@ -100,3 +100,32 @@ def test_without_a_grant_the_same_edit_is_denied(invoice_repo, state, store):
     assert f.run_job(job_id) == "done"
     branch = store.job(job_id)["data"]["delivery"]["branch"]
     assert TOTALS not in sh(invoice_repo, "git", "show", "--name-only", "--format=", branch)
+
+
+def test_agents_are_told_their_own_test_files_are_not_existing_tests(invoice_repo, state):
+    from asf.agents.roles import OWN_TESTS, PromptBuilder
+    from asf.orchestrator import _grant_note
+    prompts = PromptBuilder(load_cfg(invoice_config()), invoice_repo)
+    for role in ("implementer", "ci_fixer"):
+        assert OWN_TESTS in prompts.system(role, 3)
+        assert "you may edit them at this tier" in prompts.system(role, 0)
+    note = _grant_note("implementer", [TOTALS])
+    assert TOTALS in note and "never restricted" in note and "merge or delete" in note
+
+
+def test_job_created_tests_stay_editable_even_after_delivery(invoice_repo, state):
+    cfg = load_cfg(invoice_config())
+    sb = sandbox(invoice_repo, state, cfg)
+    impl = ToolBroker(sb, cfg, "implementer", tier=3)
+    for path in ("tests/test_a.py", "tests/test_b.py"):
+        out, err = impl.call("write_file", {"path": path, "content": "def test_x():\n    assert 1\n"})
+        assert not err, out
+    sb.commit("first delivery")  # a revision continues on top of this; the job's base is unchanged
+    reviser = ToolBroker(sb, cfg, "implementer", tier=3)
+    out, err = reviser.call("edit_file", {"path": "tests/test_a.py", "old_text": "assert 1",
+                                          "new_text": "assert 1\n    assert 2"})
+    assert not err, out
+    out, err = reviser.call("delete_file", {"path": "tests/test_b.py"})
+    assert not err, out
+    out, err = reviser.call("edit_file", EXTRA_ASSERT)
+    assert err and "when this job started" in out and "this job created are not affected" in out

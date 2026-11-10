@@ -22,6 +22,12 @@ def _template(name: str) -> str:
     return (files("asf.agents") / "prompts" / f"{name}.md").read_text()
 
 
+# What "existing" means, matching the broker: a test file present at the job's base commit.
+OWN_TESTS = ("Existing tests are the test files that were in the repository when this job started. "
+             "Test files this job created, including ones delivered earlier on this branch, are not "
+             "existing tests: you may edit, merge or delete them.")
+
+
 class PromptBuilder:
     """Builds role prompts. The shared part is computed once per job so it caches."""
 
@@ -36,7 +42,8 @@ class PromptBuilder:
 
     def system(self, role: str, tier: int) -> str:
         test_rule = ("you may edit them at this tier." if policy.may_edit_existing_tests(self.cfg, tier)
-                     else "do not edit them. Add new test files or new test cases in new files.")
+                     else "do not edit or delete them. Add new test files or new test cases in new "
+                          "files. " + OWN_TESTS)
         values = {**self.vars, "role": role, "role_title": TITLES[role], "test_edit_rule": test_rule,
                   "max_files": self.cfg.get("permissions.ci_fixer.max_files_touched", 5)}
         if role == "triage":

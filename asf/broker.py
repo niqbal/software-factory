@@ -136,9 +136,10 @@ class ToolBroker:
             if deleting:
                 raise Denied(f"deleting existing test {rel} is never allowed")
             if not policy.may_edit_existing_tests(self.cfg, self.tier) and rel not in self.grants:
-                raise Denied(f"{rel} is an existing test; at tier {self.tier} agents add tests "
-                             "rather than edit existing ones (a human can allow this file for this "
-                             "job with asf allow)")
+                raise Denied(f"{rel} is an existing test (it was in the repository when this job "
+                             f"started); at tier {self.tier} agents add tests rather than edit existing "
+                             "ones. Test files this job created are not affected. A human can allow "
+                             "this file for this job with asf allow.")
         if self.role == "ci_fixer" and rel not in self.state.touched \
                 and len(self.state.touched) >= self.max_touch:
             raise Denied(f"ci_fixer may touch at most {self.max_touch} files")

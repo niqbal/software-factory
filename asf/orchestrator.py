@@ -699,4 +699,7 @@ def _grant_note(role: str, paths: list[str]) -> str:
                 f"weaken nothing:\n{listed}")
     return ("\n\nA human allowed this job to edit these existing test files, an exception to the rule "
             "against editing existing tests. Edit them only as the work needs, and keep every "
-            f"assertion; the test_integrity gate fails if any are removed:\n{listed}")
+            f"assertion; the test_integrity gate fails if any are removed:\n{listed}\n"
+            "This adds to what you may already do. Test files this job created, including ones "
+            "delivered earlier on this branch, were never restricted: you may still edit, merge or "
+            "delete them.")
