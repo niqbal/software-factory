@@ -70,18 +70,27 @@ class Store:
         return WorkItem.from_dict(json.loads(row["payload"]))
 
     # --- jobs ---------------------------------------------------------------------
-    def create_job(self, item: WorkItem, data: dict[str, Any] | None = None) -> str:
+    def create_job(self, item: WorkItem, data: dict[str, Any] | None = None,
+                   rerun: bool = False) -> tuple[str, bool]:
+        """Return (job_id, created). A work item gets one job: polling the same issue again,
+        or a repeated webhook, returns the existing job whatever its state, so finished work
+        is never rebuilt by accident. `rerun=True` starts a new job once no job for the item
+        is still in progress (use `asf retry` to re-enter a failed or needs_human job)."""
         with self._lock:
-            existing = self.db.execute(
-                "SELECT id FROM jobs WHERE work_item_id=? AND state NOT IN "
-                "('failed','rejected','done','needs_human')", (item.id,)).fetchone()
+            if rerun:
+                sql = ("SELECT id FROM jobs WHERE work_item_id=? AND state NOT IN "
+                       "('failed','rejected','done','needs_human') ORDER BY created DESC")
+            else:
+                sql = "SELECT id FROM jobs WHERE work_item_id=? ORDER BY created DESC"
+            existing = self.db.execute(sql, (item.id,)).fetchone()
             if existing:
-                return existing["id"]
+                return existing["id"], False
             job_id = new_id("JOB")
             self.db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?)",
                             (job_id, item.id, "queued", None, json.dumps(data or {}), now(), now()))
-        self.event(job_id, "job.created", "factory", {"work_item": item.id, "title": item.title})
-        return job_id
+        self.event(job_id, "job.created", "factory", {"work_item": item.id, "title": item.title,
+                                                      **({"rerun": True} if rerun else {})})
+        return job_id, True
 
     def job(self, job_id: str) -> dict[str, Any]:
         row = self.db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()

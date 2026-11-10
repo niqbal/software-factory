@@ -159,8 +159,8 @@ def cmd_doctor(app: App) -> int:
 
 
 def cmd_intake(app: App) -> int:
-    jobs = app.factory.poll(app.args.source, app.args.id or None)
-    print(f"{len(jobs)} job(s): {', '.join(jobs) or '-'}")
+    jobs = app.factory.poll(app.args.source, app.args.id or None, rerun=app.args.rerun)
+    print(f"{len(jobs)} new job(s): {', '.join(jobs) or '-'}")
     return 0
 
 
@@ -343,6 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("intake", help="pull work items from configured sources")
     s.add_argument("--source")
     s.add_argument("--id", action="append")
+    s.add_argument("--rerun", action="store_true",
+                   help="start a new job even if the item already has a finished one")
     s = sub.add_parser("add", help="queue a work item by hand")
     s.add_argument("--title", required=True)
     s.add_argument("--body")

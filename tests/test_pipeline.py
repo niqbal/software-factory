@@ -139,6 +139,31 @@ def test_prompt_injection_is_contained(invoice_repo, state, store):
                                     store.job(job_id)["data"]["delivery"]["branch"])
 
 
+def test_finished_work_is_not_rebuilt_on_reintake(invoice_repo, state, store):
+    """A labelled issue is polled again after its job ends: it must not start a new paid job."""
+    f = factory(invoice_repo, state, store, provider())
+    for end_state in ("done", "needs_human", "failed", "rejected"):
+        it = WorkItem("github_issues", end_state, f"Issue ending {end_state}", kind="bug")
+        job_id, new_job = f.submit(it)
+        assert new_job
+        store.update_job(job_id, end_state)
+        again, new_again = f.submit(it)
+        assert (again, new_again) == (job_id, False), end_state
+    assert len(store.jobs()) == 4
+
+
+def test_rerun_starts_a_new_job_only_when_none_is_active(invoice_repo, state, store):
+    f = factory(invoice_repo, state, store, provider())
+    first, _ = f.submit(item())
+    # While the first job is still in progress, --rerun must not start a second one.
+    assert f.submit(item(), rerun=True) == (first, False)
+    store.update_job(first, "done")
+    second, new_job = f.submit(item(), rerun=True)
+    assert new_job and second != first
+    # Without --rerun, the newest job is the one that is returned from then on.
+    assert f.submit(item()) == (second, False)
+
+
 def test_dedup_and_resume_after_crash(invoice_repo, state, store):
     f = factory(invoice_repo, state, store, provider(implementer=[IMPL]))
     job_a, created = f.submit(item())

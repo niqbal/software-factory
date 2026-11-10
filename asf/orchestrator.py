@@ -101,22 +101,27 @@ class Factory:
         return lambda type_, payload: self.store.event(job_id, type_, "factory", payload)
 
     # --------------------------------------------------------------- intake --
-    def submit(self, item: WorkItem) -> tuple[str, bool]:
-        item, created = self.store.add_work_item(item)
-        job_id = self.store.create_job(item, {"started": time.time()})
-        return job_id, created
+    def submit(self, item: WorkItem, rerun: bool = False) -> tuple[str, bool]:
+        """Return (job_id, new_job). An item that already has a job keeps it (see Store.create_job)."""
+        item, _ = self.store.add_work_item(item)
+        return self.store.create_job(item, {"started": time.time()}, rerun=rerun)
 
-    def poll(self, source: str | None = None, ids: list[str] | None = None) -> list[str]:
+    def poll(self, source: str | None = None, ids: list[str] | None = None,
+             rerun: bool = False) -> list[str]:
+        """Pull items and return the ids of jobs created by this call."""
         jobs = []
         for kind, adapter in self.intake_adapters().items():
             if source and kind != source:
                 continue
             items = [adapter.fetch(i) for i in ids] if ids else adapter.poll()
             for item in items:
-                job_id, created = self.submit(item)
-                if created:
+                job_id, new_job = self.submit(item, rerun=rerun)
+                if new_job:
                     self.echo(f"queued {job_id} <- {kind}:{item.external_id} {item.title}")
-                jobs.append(job_id)
+                    jobs.append(job_id)
+                else:
+                    state = self.store.job(job_id)["state"]
+                    self.echo(f"skip   {kind}:{item.external_id} already has {job_id} ({state})")
         return jobs
 
     # ----------------------------------------------------------------- run ---

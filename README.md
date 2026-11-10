@@ -45,7 +45,7 @@ runs the whole factory inside GitHub Actions when an issue gets the `factory` la
 |---|---|
 | `init` | Setup agent: detects stacks, packages, test/lint/typecheck/build commands, dependency folders, risk-sensitive paths and trackers. Writes a pending config and commits it on `factory/setup` through a temporary worktree. |
 | `doctor` | Validates config, checks every command's executable, adapters and credentials. |
-| `intake [--source S] [--id ID]` | Pulls work items from enabled intake adapters. Deduplicates by source and id. |
+| `intake [--source S] [--id ID] [--rerun]` | Pulls work items from enabled intake adapters. Deduplicates by source and id: an item that already has a job, finished or not, is skipped, so a labelled issue is never rebuilt by accident. `--rerun` starts a new job for an item whose last job has ended. |
 | `add --title ... [--accept ...]` | Queues a work item by hand. |
 | `run [--job ID] [--all] [--stop-at STATE]` | Drives jobs through the state machine. Resumable after a crash. |
 | `status [JOB]`, `events JOB [--jsonl]`, `report` | Job list, full audit trail of every agent tool call, metrics. |
