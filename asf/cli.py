@@ -284,6 +284,23 @@ def cmd_revise(app: App) -> int:
     return 0
 
 
+def cmd_publish(app: App) -> int:
+    res = app.factory.publish(app.args.job)
+    print(f"{'updated' if res['updated'] else 'opened'} draft PR {res['url']} for {app.args.job}")
+    return 0
+
+
+def cmd_reviews(app: App) -> int:
+    actions = app.factory.reviews(app.args.job, dry_run=app.args.dry_run)
+    if not actions:
+        print("no published jobs to check")
+    for a in actions:
+        print(f"{a['job']}  PR #{a['pr']}  {a['action']}" + (f" -> {a['result']}" if a.get("result") else ""))
+        for n in a.get("notes", []):
+            print(f"    - {n[:160]}")
+    return 0
+
+
 def cmd_cleanup(app: App) -> int:
     """Remove sandboxes of finished jobs and cached base checkouts. Branches are kept."""
     from .util import git
@@ -388,6 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--note", action="append", help="one revision note (repeatable)")
     s.add_argument("--notes-file", help="file with one note per line")
     s.add_argument("--extra-usd", type=float, default=0.0, help="budget on top of the tier cap")
+    s = sub.add_parser("publish", help="push a delivered job's branch and open a draft pull request")
+    s.add_argument("job")
+    s = sub.add_parser("reviews", help="act on /revise comments on factory pull requests")
+    s.add_argument("--job", help="only this job")
+    s.add_argument("--dry-run", action="store_true", help="show what would happen; change nothing")
     sub.add_parser("cleanup", help="remove finished sandboxes (branches are kept)")
     s = sub.add_parser("pause-all", help="kill switch")
     s.add_argument("--reason")
@@ -409,7 +431,8 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
         "status": cmd_status, "events": cmd_events, "report": cmd_report,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
-        "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
+        "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "publish": cmd_publish,
+        "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
         "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters,
     }

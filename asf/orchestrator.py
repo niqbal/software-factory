@@ -187,23 +187,12 @@ class Factory:
             raise ValueError("give at least one revision note")
         job = self.store.job(job_id)
         d = job["data"]
-        if job["state"] != "done" or d.get("merged") or d.get("outcome") == "merged":
-            raise ValueError(f"{job_id} is {job['state']}"
-                             + (" and merged" if d.get("merged") or d.get("outcome") == "merged" else "")
-                             + "; only delivered, unmerged jobs can be revised")
-        branch = d.get("branch")
-        if not branch or not git(self.repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}",
-                                 check=False).strip():
-            raise ValueError(f"{job_id}: branch {branch or '(none)'} no longer exists")
-        tip = git(self.repo, "rev-parse", f"refs/heads/{branch}").strip()
-        if run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", tip, self.cfg.default_branch],
-               shell=False).ok:
-            raise ValueError(f"{branch} is already merged into {self.cfg.default_branch}; "
-                             "open a new work item for further changes")
+        tip = self._delivered_branch_tip(job, "revised")
+        sandbox_root = (d.get("sandbox") or {}).get("root")
+        branch = d["branch"]
         checked_out = [line.split(" ", 1)[1] for line in
                        git(self.repo, "worktree", "list", "--porcelain").splitlines()
                        if line.startswith("worktree ")]
-        sandbox_root = (d.get("sandbox") or {}).get("root")
         for wt in checked_out:
             if wt != sandbox_root and git(Path(wt), "rev-parse", "--abbrev-ref", "HEAD",
                                           check=False).strip() == branch:
@@ -221,6 +210,140 @@ class Factory:
         self.store.event(job_id, "job.revise", "human", {"revision": len(revisions), "notes": notes,
                                                          "from_commit": tip})
         return "implementing"
+
+    def _delivered_branch_tip(self, job: dict[str, Any], verb: str) -> str:
+        """Tip of a delivered, unmerged job's branch, or ValueError saying why it can't be used."""
+        d = job["data"]
+        merged = bool(d.get("merged")) or d.get("outcome") == "merged"
+        if job["state"] != "done" or merged:
+            raise ValueError(f"{job['id']} is {job['state']}{' and merged' if merged else ''}; "
+                             f"only delivered, unmerged jobs can be {verb}")
+        branch = d.get("branch")
+        if not branch or not git(self.repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}",
+                                 check=False).strip():
+            raise ValueError(f"{job['id']}: branch {branch or '(none)'} no longer exists")
+        tip = git(self.repo, "rev-parse", f"refs/heads/{branch}").strip()
+        if run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", tip, self.cfg.default_branch],
+               shell=False).ok:
+            raise ValueError(f"{branch} is already merged into {self.cfg.default_branch}; "
+                             "open a new work item for further changes")
+        return tip
+
+    @property
+    def github(self) -> Any:
+        """The GitHub delivery adapter, whatever delivery the config uses for new jobs."""
+        if self.delivery.kind == "github":
+            return self.delivery
+        if not hasattr(self, "_github"):
+            self._github = adapters.load("delivery", "github")(self.cfg.get("delivery.github") or {}, self.ctx)
+        return self._github
+
+    def _delivery_for(self, job: dict[str, Any]) -> Any:
+        """A job published as a pull request keeps delivering there (revisions update the PR)."""
+        return self.github if job["data"].get("pr") else self.delivery
+
+    def publish(self, job_id: str) -> dict[str, Any]:
+        """Push a delivered job's branch and open (or update) a draft pull request for it."""
+        job = self.store.job(job_id)
+        self._delivered_branch_tip(job, "published")
+        d = job["data"]
+        item = self._item(job)
+        report_path = Path(d["report"]) if d.get("report") else None
+        report = report_path.read_text() if report_path and report_path.exists() else \
+            render_report(job, item, self.store.runs(job_id), self.store.job_cost(job_id))
+        sb = type("BranchRef", (), {"branch": d["branch"], "base_sha": (d.get("sandbox") or {}).get("base_sha", "")})
+        result = self.github.deliver(job, item, sb, report, draft=True)
+        pr = {**(d.get("pr") or {}), "url": result["url"], "number": result["number"]}
+        pr.setdefault("seen", [])
+        self.store.update_job(job_id, pr=pr)
+        self.store.event(job_id, "job.published", "factory", {"url": result["url"], "updated": result["updated"]})
+        return result
+
+    def reviews(self, job_id: str | None = None, dry_run: bool = False) -> list[dict[str, Any]]:
+        """Act on `/revise` comments on factory pull requests.
+
+        A trusted comment (repo owner, member or collaborator) whose first line starts with
+        `/revise` sends the job back with notes: the rest of that comment, plus every trusted
+        line comment on the diff not yet used by an earlier revision. Untrusted comments are
+        ignored and logged. The result is posted back to the pull request.
+        """
+        gh = self.github
+        actions = []
+        jobs = [self.store.job(job_id)] if job_id else [j for j in self.store.jobs() if j["data"].get("pr")]
+        for job in jobs:
+            pr = job["data"].get("pr")
+            if not pr or not pr.get("number"):
+                continue
+            number = pr["number"]
+            state = gh.pr_state(number)
+            if state != "OPEN":
+                actions.append({"job": job["id"], "pr": number, "action": f"skip: PR is {state.lower()}"})
+                continue
+            seen = set(pr.get("seen", []))
+            fresh = [c for c in gh.comments(number) if c["id"] not in seen]
+            ignored = [c for c in fresh if not gh.trusted(c)]
+            trusted = [c for c in fresh if gh.trusted(c)]
+            triggers = [c for c in trusted if c["kind"] in ("comment", "review")
+                        and c["body"].splitlines()[0].strip().lower().startswith("/revise")]
+            lines = [c for c in trusted if c["kind"] == "line"]
+            chatter = [c for c in trusted if c["kind"] != "line" and c not in triggers]
+            if not dry_run:
+                for c in ignored:
+                    self.store.event(job["id"], "pr.comment_ignored", "factory",
+                                     {"id": c["id"], "author": c["author"], "association": c["association"]})
+            if not triggers:
+                # Discussion and untrusted comments are done with; line comments wait for a /revise.
+                if not dry_run and (ignored or chatter):
+                    self._mark_seen(job["id"], [c["id"] for c in ignored + chatter])
+                actions.append({"job": job["id"], "pr": number,
+                                "action": f"no /revise yet ({len(lines)} line comment(s) waiting)"})
+                continue
+            notes = []
+            for t in triggers:
+                rest = t["body"].strip()[len("/revise"):].strip()
+                if rest:
+                    notes.append(rest)
+            notes += [f"{c['path']}:{c['line']}: {c['body']}" if c.get("path") else c["body"] for c in lines]
+            act = {"job": job["id"], "pr": number, "action": "revise", "notes": notes}
+            actions.append(act)
+            if dry_run:
+                continue
+            self._mark_seen(job["id"], [c["id"] for c in fresh])
+            if job["state"] != "done":
+                gh.comment(number, f"The factory is still working on `{job['id']}` ({job['state']}); "
+                                   "comment `/revise` again once it has finished.")
+                act["action"] = f"skip: job is {job['state']}"
+                continue
+            if not notes:
+                gh.comment(number, "`/revise` needs notes: write them after the command, or leave line "
+                                   "comments on the diff first.")
+                act["action"] = "skip: no notes"
+                continue
+            try:
+                self.revise(job["id"], notes)
+            except ValueError as e:
+                gh.comment(number, f"Could not revise `{job['id']}`: {e}")
+                act["action"] = f"refused: {e}"
+                continue
+            self.echo(f"revising {job['id']} from PR #{number} with {len(notes)} note(s)")
+            final = self.run_job(job["id"])
+            done = self.store.job(job["id"])
+            act["result"] = final
+            rev = (done["data"].get("revisions") or [{}])[-1]
+            if final == "done" and rev.get("commit"):
+                msg = (f"**Revision {rev['n']}** pushed as {rev['commit'][:10]}. Notes addressed:\n"
+                       + "\n".join(f"- {n}" for n in notes)
+                       + f"\n\n{(done['data'].get('implementer') or '').strip()[:1500]}")
+            else:
+                reason = done["data"].get("needs_human_reason") or done["data"].get("error") or final
+                msg = f"Revision stopped at `{final}`: {str(reason)[:1500]}"
+            gh.comment(number, msg + f"\n\n<sub>Factory job `{job['id']}`</sub>")
+        return actions
+
+    def _mark_seen(self, job_id: str, ids: list[str]) -> None:
+        pr = dict(self.store.job(job_id)["data"].get("pr") or {})
+        pr["seen"] = sorted(set(pr.get("seen", [])) | set(ids))
+        self.store.update_job(job_id, pr=pr)
 
     def _active_revision(self, job: dict[str, Any]) -> dict[str, Any] | None:
         """The revision in progress, if the job was sent back with `revise` and is not done yet."""
@@ -442,8 +565,12 @@ class Factory:
         item = self._item(job)
         report = Path(job["data"]["report"]).read_text()
         draft = bool(self.cfg.get("delivery.draft", True)) or not d["may_agent_merge"]
-        result = self.delivery.deliver(job, item, self._sandbox(job), report, draft=draft)
+        result = self._delivery_for(job).deliver(job, item, self._sandbox(job), report, draft=draft)
         self.store.update_job(job["id"], delivery=result)
+        if result.get("kind") == "github" and result.get("number"):
+            pr = {**(job["data"].get("pr") or {}), "url": result["url"], "number": result["number"]}
+            pr.setdefault("seen", [])
+            self.store.update_job(job["id"], pr=pr)
         if not d["may_agent_merge"]:
             self.store.update_job(job["id"], "done", outcome="delivered for human merge")
             self._finish(job, f"delivered {result.get('url') or result.get('branch')} ({d['reason']})")
