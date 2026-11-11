@@ -69,6 +69,28 @@ projects:
   CycleSense-98c570: {archived: true}
 ```
 
+## The scheduler: one queue for every project
+
+All projects share one model subscription, so one scheduler runs their jobs. Start and stop it,
+and switch its behaviour, from the console's home page or in `~/.asf/projects.yaml`:
+
+```yaml
+scheduler: {mode: priority, concurrency: 1, auto_resume: true}
+projects:
+  workflow-engine-11bf9a: {priority: 1}   # lower runs first
+```
+
+| Mode | Behaviour |
+|---|---|
+| `priority` | Strict priority: the highest-priority project's work runs until it has nothing runnable; lower-priority projects wait. |
+| `combined` | Interleaved: jobs are taken from every project in turn (priority breaks ties), so all keep moving. |
+| `separate` | Each project runs on its own, as if it had its own factory; none waits for another. |
+
+In every mode at most `concurrency` jobs run at once, and within a project the work furthest
+along (verifying, reviewing) goes before new work. A usage-limit error ("You've hit your
+5-hour limit · resets 1pm (Asia/Karachi)") pauses all model work until the stated reset; with
+`auto_resume`, the jobs it interrupted continue where they stopped.
+
 ## Job states: delivered is not done
 
 ```

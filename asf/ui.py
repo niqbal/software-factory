@@ -91,6 +91,10 @@ class Console:
         threading.Thread(target=go, daemon=True).start()
 
     # ---------------------------------------------------------------------- worker --
+    def _sched_running(self) -> bool:
+        sch = getattr(self, "scheduler", None)
+        return sch.is_running() if sch else self.worker_running()
+
     def worker_running(self) -> bool:
         return bool(self.worker and self.worker.is_alive())
 
@@ -147,7 +151,9 @@ class Console:
                 "created": j["created"], "updated": j["updated"], "running": j["id"] == self.current,
             })
         return {"repo": f.repo.name, "default_branch": f.cfg.default_branch, "metrics": m, "jobs": jobs,
-                "backlog": self.backlog(), "worker": {"running": self.worker_running(), "current": self.current},
+                "backlog": self.backlog(),
+                "worker": {"running": self._sched_running(), "current": self.current,
+                           "scheduler": getattr(self, "scheduler", None) is not None},
                 "paused": f.paused() or "", "log": list(self.log)[-80:], "activity": list(self.activity)[:12],
                 "shadow": bool(f.cfg.get("autonomy.shadow")), "max_merge_tier": f.cfg.get("autonomy.max_merge_tier")}
 
@@ -351,6 +357,8 @@ class Portfolio:
         self.lock = threading.Lock()
         self.token = pysecrets.token_urlsafe(24)
         self.stop_all = threading.Event()
+        from .scheduler import Scheduler
+        self.scheduler = Scheduler(self)
 
     def projects(self) -> list[Any]:
         from .projects import discover
@@ -373,6 +381,7 @@ class Portfolio:
         c = Console(f)
         c.token = self.token
         c.project = proj
+        c.scheduler = self.scheduler
         migrated = f.migrate_legacy()
         if migrated:
             c._echo(f"migrated {migrated} job(s) saved when 'done' meant delivered")
@@ -410,7 +419,7 @@ class Portfolio:
                 "oldest_wait_s": max([now - (j["data"].get("delivered_at") or j["updated"]) for j in waiting] or [0]),
                 "in_progress": m["counts"]["in_progress"] + m["counts"]["verifying"],
                 "running": c.current or next((j["id"] for j in jobs if j["id"] in c.busy), None),
-                "worker": c.worker_running(),
+                "worker": any(proj == p.key for proj, _ in self.scheduler.running.values()),
                 "shipped": m["counts"]["shipped"],
                 "shipped_7d": sum(1 for j in jobs if j["state"] == "done" and (j["data"].get("done_at") or 0) > now - 7 * 86400),
                 "cost_per_shipped": m["cost_per_shipped_usd"], "waste_share": m["waste_share"],
@@ -420,7 +429,7 @@ class Portfolio:
             cards.append(card)
         inbox.sort(key=lambda x: x["waiting_since"])
         totals = {k: sum(c.get(k) or 0 for c in cards) for k in ("needs_you", "in_progress", "shipped", "shipped_7d", "spend")}
-        return {"projects": cards, "inbox": inbox, "totals": totals}
+        return {"projects": cards, "inbox": inbox, "totals": totals, "scheduler": self.scheduler.status()}
 
     def start_reconciler(self, interval: float = 20.0) -> None:
         def loop() -> None:
@@ -471,6 +480,8 @@ def make_handler(portfolio: Portfolio):
                     return self._send(200, page.replace("__ASF_TOKEN__", portfolio.token), "text/html; charset=utf-8")
                 if path == "/api/portfolio":
                     return self._send(200, portfolio.summary())
+                if path == "/api/scheduler":
+                    return self._send(200, portfolio.scheduler.status())
                 if len(parts) >= 4 and parts[:2] == ["api", "p"]:
                     c = portfolio.console(parts[2])
                     if parts[3] == "state":
@@ -495,14 +506,21 @@ def make_handler(portfolio: Portfolio):
                     allowed = {k: payload[k] for k in ("name", "priority", "archived", "hidden") if k in payload}
                     set_entry(parts[2], **allowed)
                     return self._send(200, {"message": "saved"})
+                if parts == ["api", "scheduler", "start"]:
+                    return self._send(200, {"message": portfolio.scheduler.start()})
+                if parts == ["api", "scheduler", "stop"]:
+                    return self._send(200, {"message": portfolio.scheduler.stop()})
+                if parts == ["api", "scheduler", "settings"]:
+                    from .scheduler import save_settings
+                    saved = save_settings(**{k: payload[k] for k in ("mode", "concurrency", "auto_resume") if k in payload})
+                    return self._send(200, {"message": f"scheduler: {saved['mode']} mode, concurrency {saved['concurrency']}"})
                 if len(parts) < 4 or parts[:2] != ["api", "p"]:
                     return self._send(404, {"error": "not found"})
                 c, rest = portfolio.console(parts[2]), parts[3:]
                 if rest == ["worker", "start"]:
-                    return self._send(200, {"message": c.start_worker()})
+                    return self._send(200, {"message": portfolio.scheduler.start()})
                 if rest == ["worker", "stop"]:
-                    c.stop.set()
-                    return self._send(200, {"message": "stopping after the current step"})
+                    return self._send(200, {"message": portfolio.scheduler.stop()})
                 if rest == ["intake"]:
                     return self._send(200, {"message": f"{len(c.f.poll())} new job(s)"})
                 if rest == ["pause-all"]:
@@ -539,6 +557,7 @@ def serve(port: int, open_project: str | None = None, open_browser: bool = False
         pass
     finally:
         portfolio.stop_all.set()
+        portfolio.scheduler.stop()
         for c in portfolio.consoles.values():
             c.stop.set()
             c.stop_all.set()

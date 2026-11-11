@@ -91,6 +91,12 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
 .card .grid span{font-size:11px;color:var(--muted)}
 .home-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);min-width:0;gap:14px;padding:4px 20px 20px;align-items:start}
 @media (max-width:900px){.home-main{grid-template-columns:1fr}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:none;border-radius:0;border-right:1px solid var(--line);font-weight:550}
+.seg button:last-child{border-right:none} .seg button.on{background:var(--accent);color:var(--accent-ink)}
+.sched{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.sched .line{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.prio{width:52px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit}
 .tag{font-size:11px;font-weight:600;color:var(--violet);background:var(--violet-bg);padding:1px 7px;border-radius:999px}
 </style>
 </head>
@@ -109,6 +115,7 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
 
 <div id="homeView" style="display:none">
   <section class="tiles" id="homeTiles"></section>
+  <div style="padding:0 20px 12px"><div class="panel"><h2>Scheduler <span class="n" id="schedState"></span></h2><div class="sched" id="sched"></div></div></div>
   <div class="home-main">
     <div class="panel"><h2>Inbox: everything waiting on you <span class="n" id="nInbox"></span></h2><div class="list" id="inbox"></div></div>
     <div><div class="panel" style="border:none;background:none"><h2 style="border:none;padding-left:0">Projects</h2></div><div class="cards" id="cards" style="padding:0"></div></div>
@@ -200,8 +207,10 @@ function render() {
     : `<span class="chip ok">auto-merge up to tier ${esc(S.max_merge_tier)}</span>`;
   const w = S.worker;
   $('workerChip').innerHTML = S.paused ? `<span class="chip bad">${esc(S.paused)}</span>`
-    : w.running ? `<span class="chip info"><span class="dot pulse"></span>working${w.current ? ' on ' + esc(w.current) : ''}</span>` : '<span class="chip">idle</span>';
-  $('workerBtn').textContent = w.running ? 'Stop after this step' : 'Run queue';
+    : w.current ? `<span class="chip info"><span class="dot pulse"></span>working on ${esc(w.current)}</span>`
+    : w.running ? '<span class="chip info">scheduler on</span>' : '<span class="chip">scheduler off</span>';
+  $('workerBtn').textContent = w.running ? 'Stop scheduler' : 'Run scheduler';
+  $('workerBtn').title = 'Starts the one scheduler for all projects (mode and priorities are on the All projects page)';
   $('workerBtn').className = w.running ? '' : 'primary';
   $('pauseBtn').textContent = S.paused ? 'Resume all' : 'Pause all';
   tiles(S.metrics);
@@ -319,6 +328,7 @@ $('intakeBtn').onclick = () => post(pa('/intake'), {}, 'pull work items');
 const age = s => s < 3600 ? Math.round(s/60) + ' min' : s < 172800 ? Math.round(s/3600) + ' h' : Math.round(s/86400) + ' d';
 function renderHome() {
   const t = H.totals;
+  renderScheduler(H.scheduler);
   $('repo').textContent = `${H.projects.length} project${H.projects.length === 1 ? '' : 's'}`;
   $('policy').innerHTML = '';
   $('homeTiles').innerHTML = [['Waiting on you', t.needs_you, 'across all projects'], ['In progress', t.in_progress, 'agent work under way'],
@@ -329,12 +339,14 @@ function renderHome() {
       <div class="t">${esc(name(i.item, i.title))}</div><div>${chip(i.state)}</div>
       <div class="m"><span class="tag">${esc(i.project_name)}</span> ${i.owner_review ? '<span class="chip violet">owner review</span> ' : ''}waiting ${age(Date.now()/1000 - i.waiting_since)}${i.reason ? ' · ' + esc(i.reason) : ''}</div></div>`).join('')
     || '<div class="empty">Inbox zero: nothing in any project is waiting on you.</div>';
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#cards')) return;
   $('cards').innerHTML = H.projects.map(p => {
     if (p.error) return `<div class="card"><h3>${esc(p.name)}</h3><div class="callout bad">${esc(p.error)}</div><div class="hint">${esc(p.repo)}</div></div>`;
     const status = p.paused ? `<span class="chip bad">paused</span>` : p.worker || p.running ? `<span class="chip info"><span class="dot pulse"></span>working</span>` : `<span class="chip">idle</span>`;
     return `<div class="card ${p.archived ? 'archived' : ''}" onclick="location.hash='#p/${p.key}'">
       <h3>${esc(p.name)} ${status}${p.archived ? '<span class="chip">archived</span>' : ''}</h3>
       <div class="hint">${esc(p.repo)} · ${p.shadow ? 'shadow mode' : 'auto-merge ≤ tier ' + esc(p.max_merge_tier)} · last activity ${p.last_activity ? ago(p.last_activity) : '–'}</div>
+      <div class="hint" onclick="event.stopPropagation()">Priority <input class="prio" type="number" min="1" value="${p.priority}" onchange="setPriority('${p.key}', this.value)"> <span>(lower runs first)</span></div>
       <div class="grid">
         <div><b style="color:${p.needs_you ? 'var(--bad)' : 'inherit'}">${p.needs_you}</b><span>need you${p.needs_you ? ' · oldest ' + age(p.oldest_wait_s) : ''}</span></div>
         <div><b>${p.in_progress}</b><span>in progress</span></div>
@@ -344,6 +356,29 @@ function renderHome() {
         <div><b>${Math.round((p.waste_share||0)*100)}%</b><span>waste</span></div>
       </div></div>`; }).join('') || '<div class="empty">No projects yet. Run <code>asf --repo PATH init</code> in a repository.</div>';
 }
+
+const MODE_HELP = {
+  priority: 'Finish the highest-priority project first; lower-priority projects wait until it has nothing runnable.',
+  combined: 'Take jobs from every project in turn, so all keep moving (priority breaks ties).',
+  separate: 'Each project runs on its own, as if it had its own factory; none waits for another.',
+};
+function renderScheduler(sc) {
+  $('schedState').innerHTML = sc.limited_until ? `<span class="chip warn">usage limit: resumes ${new Date(sc.limited_until).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>`
+    : sc.running ? '<span class="chip info"><span class="dot pulse"></span>running</span>' : '<span class="chip">stopped</span>';
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#sched')) return;
+  const seg = sc.modes.map(m => `<button class="${sc.mode===m?'on':''}" onclick="schedSet({mode:'${m}'})">${{priority:'Priority first',combined:'Combined',separate:'Separate'}[m]}</button>`).join('');
+  const jobs = sc.jobs.length ? sc.jobs.map(j => `<span class="tag">${esc(j.project)}</span> ${esc(j.job)}`).join(' · ') : (sc.idle_reason ? esc(sc.idle_reason) : 'no jobs running');
+  $('sched').innerHTML = `<div class="line"><span class="seg">${seg}</span>
+      <label class="hint">Concurrency <input class="prio" type="number" min="1" max="8" value="${sc.concurrency}" onchange="schedSet({concurrency:this.value})"></label>
+      <label class="hint"><input type="checkbox" ${sc.auto_resume?'checked':''} onchange="schedSet({auto_resume:this.checked})"> resume jobs after a usage limit</label>
+      <span class="spacer"></span>
+      ${sc.running ? '<button onclick="post(\'/api/scheduler/stop\', {}, \'stop\')">Stop</button>' : '<button class="primary" onclick="post(\'/api/scheduler/start\', {}, \'start\')">Start scheduler</button>'}</div>
+    <div class="hint">${esc(MODE_HELP[sc.mode] || '')}</div>
+    <div><b>Running:</b> ${jobs}${sc.waiting_to_resume ? ` · ${sc.waiting_to_resume} job(s) resume after the limit` : ''}</div>
+    ${sc.log.length ? `<details><summary style="padding:0">Scheduler log</summary><pre style="margin-top:6px">${esc(sc.log.slice(-12).join('\n'))}</pre></details>` : ''}`;
+}
+async function schedSet(fields) { await post('/api/scheduler/settings', fields, 'scheduler'); }
+async function setPriority(key, v) { await post(`/api/projects/${key}/settings`, {priority: Number(v)}, 'priority'); }
 
 // ---- routing -----------------------------------------------------------------------------
 function route() {
