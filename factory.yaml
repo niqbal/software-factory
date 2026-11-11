@@ -1,0 +1,108 @@
+# factory.yaml - the factory working on itself. Drafted with `asf init` on 2026-11-12, then
+# edited by hand. Agents cannot edit this file.
+#
+# Self-hosting rules:
+# - The trust boundary (broker, policy, gates, config, sandbox, model providers, agent prompts)
+#   is tier 3: owner-only, shown as its own diff in the console.
+# - The tests that prove that boundary are protected: agents can add tests, not weaken these.
+# - Nothing merges by itself. A merge changes the factory that is running, so you merge from
+#   the console and restart `asf ui` to pick the change up.
+
+version: 1
+project:
+  name: software-factory
+  default_branch: main
+  stacks: [python]
+  remote: git@github.com:niqbal/software-factory.git
+
+packages:
+- name: asf
+  root: .
+  triggers: ['**']
+  commands:
+    # `python -m` puts the sandbox first on sys.path, so tests import the sandbox's asf,
+    # not the editable install the running factory uses.
+    test: .venv/bin/python -m pytest -q {args}
+
+# Work items: Markdown files with YAML front matter in ~/.asf/<project>/inbox, or `asf add`.
+intake:
+  local:
+    enabled: true
+  github_issues:
+    enabled: false
+    label: factory
+    write_back: false
+
+execution:
+  provider: local_worktree
+  clone_dirs: [.venv]
+  setup: []
+
+tiers:
+  rules:
+  - paths: [docs/**, design/**, '**/*.md']
+    tier: 0
+  - paths: [tests/**, asf/ui_static/**]
+    tier: 1
+  - paths: [asf/broker.py, asf/policy.py, asf/gates.py, asf/config.py, asf/orchestrator.py,
+            asf/server.py, asf/adapters/sandbox/**, asf/adapters/models/**, asf/adapters/delivery/**,
+            asf/agents/prompts/**, asf/agents/roles.py, asf/agents/context.py, asf/templates/**,
+            pyproject.toml, .github/**, factory.yaml]
+    tier: 3
+  classifier_default: 2
+
+permissions:
+  protected_paths: [factory.yaml, .github/**, "**/.env", "**/.env.*",
+                    tests/test_broker.py, tests/test_policy_config.py, tests/test_gates.py]
+
+context:
+  instruction_files: [README.md]
+
+models:
+  # Cursor (larger balance) implements; Claude reviews. Either takes over when the other hits
+  # its usage limit.
+  provider: pool
+  backends:
+    cursor:
+      provider: cursor_cli
+      timeout_s: 900
+      default: {model: gpt-5.3-codex}
+      roles:
+        implementer: {model: gpt-5.3-codex-high}
+        triage: {model: gpt-5.3-codex-low}
+    claude:
+      provider: claude_code
+      timeout_s: 900
+      default: {model: claude-opus-5-5, effort: medium}
+      roles:
+        triage: {model: claude-haiku-5-5, effort: low}
+        implementer: {model: claude-opus-5-5, effort: high}
+        reviewer: {model: claude-opus-5-5, effort: high}
+        security: {model: claude-sonnet-5-5, effort: medium}
+  routing:
+    default: [cursor, claude]
+    reviewer: [claude, cursor]
+    security: [claude, cursor]
+
+# Subscription CLIs: dollars are list-price estimates, so only time limits bite.
+budgets:
+  tier_0: {usd: 100.0, minutes: 600}
+  tier_1: {usd: 100.0, minutes: 600}
+  tier_2: {usd: 150.0, minutes: 900}
+  tier_3: {usd: 200.0, minutes: 900}
+  monthly_cap_usd: 100000.0
+
+limits:
+  max_changed_lines: {tier_0: 600, tier_1: 1500, tier_2: 2000, tier_3: 2000}
+
+# Done means main still passes the whole suite after the merge.
+observe:
+  provider: none
+  post_merge: [".venv/bin/python -m pytest -q"]
+
+delivery:
+  provider: local_git
+
+autonomy:
+  shadow: true
+  max_merge_tier: -1

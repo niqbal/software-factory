@@ -81,6 +81,15 @@ class App:
     def store(self) -> Store:
         return self.factory.store
 
+    def register(self, name: str | None = None, priority: int | None = None) -> None:
+        """Make the project visible to `asf ui` and the scheduler before any job exists."""
+        from .projects import record, set_entry
+        Store(self.state_dir / "factory.db")
+        record(self.state_dir, self.repo)
+        entry = {k: v for k, v in (("name", name), ("priority", priority)) if v is not None}
+        if entry:
+            set_entry(self.state_dir.name, **entry)
+
     @property
     def factory(self) -> Factory:
         if self._factory is None:
@@ -108,6 +117,8 @@ def cmd_init(app: App) -> int:
         return 1
     pending.write_text(text)
     print(f"Drafted config: {pending}")
+    app.register(name=app.args.name, priority=app.args.priority)
+    print(f"Registered as {app.state_dir.name}; it appears in `asf ui`.")
     if not app.args.no_branch:
         commit = setup_agent.write_branch(app.repo, text, app.args.branch, app.state_dir)
         print(f"Committed it on branch {app.args.branch} ({commit[:10]}) without touching your checkout.")
@@ -169,6 +180,8 @@ def cmd_doctor(app: App) -> int:
         check(bool(b), f"Claude Code CLI at {b}", "Claude Code CLI not found: set models.binary or ASF_CLAUDE_BIN")
     print(f"  info  shadow mode {'on' if cfg.get('autonomy.shadow') else 'off'}, max merge tier "
           f"{cfg.get('autonomy.max_merge_tier')}, monthly cap ${cfg.get('budgets.monthly_cap_usd')}")
+    if ok:
+        app.register()
     print("healthy" if ok else "problems found")
     return 0 if ok else 1
 
@@ -386,6 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-branch", action="store_true")
     s.add_argument("--print", action="store_true")
     s.add_argument("--force", action="store_true")
+    s.add_argument("--name", help="display name in the console")
+    s.add_argument("--priority", type=int, help="scheduler priority (lower runs first; default 100)")
     sub.add_parser("doctor", help="check config, commands, adapters and credentials")
     s = sub.add_parser("intake", help="pull work items from configured sources")
     s.add_argument("--source")

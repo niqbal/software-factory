@@ -38,3 +38,31 @@ def test_python_and_go(tmp_path):
     assert "pytest" in cmds["test"] and "ruff" in cmds["lint"]
     go = make_repo(tmp_path / "go", {"go.mod": "module x\n", "main.go": "package main\n"})
     assert setup_agent.detect(go)["packages"][0]["commands"]["test"].startswith("go test")
+
+
+def test_models_drafted_from_installed_clis():
+    both = setup_agent.draft_models(claude="/bin/claude", cursor="/bin/cursor-agent")
+    assert both["provider"] == "pool" and list(both["backends"]) == ["cursor", "claude"]
+    assert both["routing"]["reviewer"] == ["claude", "cursor"]
+    assert setup_agent.draft_models(claude="/bin/claude", cursor=None)["provider"] == "claude_code"
+    assert setup_agent.draft_models(claude=None, cursor="/bin/cursor-agent")["provider"] == "cursor_cli"
+    assert setup_agent.draft_models(claude=None, cursor=None) == {"provider": "anthropic"}
+    for m in (both, {"provider": "anthropic"}):
+        config_mod.load(text=json.dumps({"version": 1, "project": {"name": "x"}, "models": m}))
+
+
+def test_init_registers_the_project(tmp_path, monkeypatch):
+    from asf import cli, projects
+    monkeypatch.setenv("ASF_HOME", str(tmp_path / "home"))
+    repo = make_repo(tmp_path / "game", {"package.json": json.dumps({"scripts": {"test": "node --test"}})})
+    assert cli.main(["--repo", str(repo), "init", "--no-branch", "--name", "Game", "--priority", "3"]) == 0
+    [p] = projects.discover(tmp_path / "home")
+    assert p.repo == repo.resolve() and p.name == "Game" and p.priority == 3
+
+
+def test_cli_drafts_get_subscription_budgets(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path / "r", {"go.mod": "module x\n"})
+    monkeypatch.setattr(setup_agent, "draft_models", lambda: {"provider": "claude_code"})
+    assert setup_agent.detect(repo)["budgets"]["monthly_cap_usd"] == 100000.0
+    monkeypatch.setattr(setup_agent, "draft_models", lambda: {"provider": "anthropic"})
+    assert "budgets" not in setup_agent.detect(repo)

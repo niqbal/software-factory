@@ -19,6 +19,8 @@ For a worked example of how the factory was built and what it did on a real back
 
 ## Quick start for a new repository
 
+Step-by-step, for new and existing repositories: [docs/ADD-A-PROJECT.md](docs/ADD-A-PROJECT.md).
+
 ```bash
 pip install -e .                                   # or: pip install asf
 asf --repo ~/code/myapp init                       # drafts factory.yaml, commits it on branch factory/setup
@@ -146,8 +148,8 @@ writing the change.
 
 | Command | What it does |
 |---|---|
-| `init` | Setup agent: detects stacks, packages, test/lint/typecheck/build commands, dependency folders, risk-sensitive paths and trackers. Writes a pending config and commits it on `factory/setup` through a temporary worktree. |
-| `doctor` | Validates config, checks every command's executable, adapters and credentials. |
+| `init [--name N] [--priority P]` | Setup agent: detects stacks, packages, test/lint/typecheck/build commands, dependency folders, risk-sensitive paths, trackers and the model CLIs installed here. Writes a pending config, commits it on `factory/setup` through a temporary worktree, and registers the project in the console. |
+| `doctor` | Validates config, checks every command's executable, adapters and credentials. When healthy, registers the project. |
 | `intake [--source S] [--id ID] [--rerun]` | Pulls work items from enabled intake adapters. Deduplicates by source and id: an item that already has a job, finished or not, is skipped, so a labelled issue is never rebuilt by accident. `--rerun` starts a new job for an item whose last job has ended. |
 | `add --title ... [--accept ...]` | Queues a work item by hand. |
 | `run [--job ID] [--all] [--stop-at STATE]` | Drives jobs through the state machine. Resumable after a crash. |

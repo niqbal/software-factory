@@ -237,7 +237,8 @@ def detect(repo: Path) -> dict[str, Any]:
                                      ".github/copilot-instructions.md", "README.md") if (repo / n).exists()]
     ci = [n for n in (".github/workflows", ".gitlab-ci.yml", ".circleci", "bitbucket-pipelines.yml")
           if (repo / n).exists()]
-    return {
+    models = draft_models()
+    out = {
         "version": 1,
         "project": {"name": repo.name, "default_branch": default_branch(repo),
                     "stacks": sorted(stacks), "deploy_targets": deploy, "ci": ci,
@@ -251,9 +252,50 @@ def detect(repo: Path) -> dict[str, Any]:
             {"paths": sorted(tier3), "tier": 3},
         ], "classifier_default": 2},
         "context": {"instruction_files": instruction_files},
+        "models": models,
         "delivery": {"provider": "local_git"},
         "autonomy": {"shadow": True, "max_merge_tier": -1},
     }
+    if models["provider"] != "anthropic":
+        out["budgets"] = CLI_BUDGETS
+    return out
+
+
+# CLI backends bill against subscriptions, so dollar figures are list-price estimates and only
+# time is a real limit; API-sized defaults would pause most jobs.
+CLI_BUDGETS = {"tier_0": {"usd": 100.0, "minutes": 600}, "tier_1": {"usd": 100.0, "minutes": 600},
+               "tier_2": {"usd": 150.0, "minutes": 900}, "tier_3": {"usd": 200.0, "minutes": 900},
+               "monthly_cap_usd": 100000.0}
+
+
+def draft_models(claude: str | None = "detect", cursor: str | None = "detect") -> dict[str, Any]:
+    """Model backends from the CLIs on this machine (subscriptions, no API key needed).
+
+    Both installed: a pool where Cursor implements and Claude reviews, each failing over to the
+    other on a usage limit. One installed: that one alone. Neither: the Anthropic API.
+    """
+    from .adapters.models.claude_code import find_binary as find_claude
+    from .adapters.models.cursor_cli import find_binary as find_cursor
+    claude = find_claude({}) if claude == "detect" else claude
+    cursor = find_cursor({}) if cursor == "detect" else cursor
+    claude_cfg = {"provider": "claude_code", "timeout_s": 900,
+                  "default": {"model": "claude-opus-5-5", "effort": "medium"},
+                  "roles": {"triage": {"model": "claude-haiku-5-5", "effort": "low"},
+                            "implementer": {"model": "claude-opus-5-5", "effort": "high"},
+                            "reviewer": {"model": "claude-opus-5-5", "effort": "high"},
+                            "security": {"model": "claude-sonnet-5-5", "effort": "medium"}}}
+    cursor_cfg = {"provider": "cursor_cli", "timeout_s": 900, "default": {"model": "gpt-5.3-codex"},
+                  "roles": {"implementer": {"model": "gpt-5.3-codex-high"},
+                            "triage": {"model": "gpt-5.3-codex-low"}}}
+    if claude and cursor:
+        return {"provider": "pool", "backends": {"cursor": cursor_cfg, "claude": claude_cfg},
+                "routing": {"default": ["cursor", "claude"], "reviewer": ["claude", "cursor"],
+                            "security": ["claude", "cursor"]}}
+    if claude:
+        return claude_cfg
+    if cursor:
+        return cursor_cfg
+    return {"provider": "anthropic"}
 
 
 def _glob_hit(path: str, pattern: str) -> bool:
@@ -277,6 +319,9 @@ SECTION_NOTES = {
     "execution": "local_worktree: git worktree + scrubbed env (laptop or CI runner).\n"
                  "# docker: same, but commands run in a container with no network.",
     "tiers": "Path rules win over the triage classifier; a `tier:N` label overrides both.",
+    "budgets": "Subscription CLIs: dollars are list-price estimates, so only time limits bite.",
+    "models": "Model backends, from the CLIs found on this machine. A pool routes each role to a\n"
+              "# backend in order and fails over when one hits its usage limit.",
     "autonomy": "Shadow mode: agents open draft branches/PRs and nothing merges.\n"
                 "# Raise max_merge_tier (in a reviewed PR) once the shadow report looks good.",
 }
