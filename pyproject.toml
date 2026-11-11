@@ -20,7 +20,7 @@ include = ["asf*"]
 
 [tool.setuptools.package-data]
 "asf.agents" = ["prompts/*.md"]
-"asf" = ["templates/*"]
+"asf" = ["templates/*", "ui_static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

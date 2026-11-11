@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="asf-token" content="__ASF_TOKEN__">
+<title>Factory console</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --ink:#1b1f24; --muted:#5f6b7a; --line:#e3e7ec; --hover:#f0f3f7;
+  --accent:#2f6fde; --accent-ink:#fff; --ok:#1a7f4b; --warn:#b45c00; --bad:#c22e2e; --violet:#6b4fd8;
+  --ok-bg:#e6f4ec; --warn-bg:#fdf1e3; --bad-bg:#fbe9e9; --info-bg:#e8f0fd; --violet-bg:#efebfc;
+  --add:#e6f6ea; --del:#fbeaea; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0f1216; --panel:#171b21; --ink:#e6e9ee; --muted:#93a0b0; --line:#262c35; --hover:#1e242c;
+  --accent:#5b8ef0; --ok:#4cc38a; --warn:#f0a24b; --bad:#f07070; --violet:#a693f5;
+  --ok-bg:#12291e; --warn-bg:#2d2112; --bad-bg:#2e1717; --info-bg:#16233a; --violet-bg:#221c3a;
+  --add:#11281a; --del:#2e1616;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:650}
+header .repo{color:var(--muted)}
+.spacer{flex:1}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--hover);color:var(--muted);white-space:nowrap}
+.chip.ok{background:var(--ok-bg);color:var(--ok)} .chip.warn{background:var(--warn-bg);color:var(--warn)}
+.chip.bad{background:var(--bad-bg);color:var(--bad)} .chip.info{background:var(--info-bg);color:var(--accent)}
+.chip.violet{background:var(--violet-bg);color:var(--violet)}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+.dot.pulse{animation:pulse 1.2s infinite} @keyframes pulse{50%{opacity:.25}}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 12px;border-radius:7px;cursor:pointer;font-weight:550}
+button:hover{background:var(--hover)} button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.primary:hover{filter:brightness(1.07)}
+button.danger{color:var(--bad)} button.small{padding:3px 9px;font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;padding:14px 20px 4px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.tile .k{color:var(--muted);font-size:12px} .tile .v{font-size:22px;font-weight:650;margin-top:2px}
+.tile .s{color:var(--muted);font-size:12px;margin-top:2px}
+main{display:grid;grid-template-columns:minmax(320px,430px) minmax(0,1fr);gap:14px;padding:12px 20px 20px;align-items:start}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.panel h2{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0;padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.panel h2 .n{margin-left:auto;font-weight:600}
+.list{max-height:none}
+.row{padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:2px 8px}
+.row:last-child{border-bottom:none}
+.row:hover{background:var(--hover)} .row.sel{background:var(--info-bg)}
+.row .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .m{grid-column:1/-1;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.empty{padding:14px;color:var(--muted)}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+#detail{min-height:300px}
+.dhead{padding:14px 16px;border-bottom:1px solid var(--line)}
+.dhead h3{margin:0 0 6px;font-size:17px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:12px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--line)}
+.tab{padding:9px 12px;border:none;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted)}
+.tab.on{color:var(--ink);border-bottom-color:var(--accent)}
+.body{padding:14px 16px}
+.sec{margin-bottom:18px} .sec h4{margin:0 0 6px;font-size:13px}
+.callout{border-radius:8px;padding:10px 12px;margin-bottom:14px;white-space:pre-wrap}
+.callout.bad{background:var(--bad-bg)} .callout.warn{background:var(--warn-bg)} .callout.violet{background:var(--violet-bg)} .callout.ok{background:var(--ok-bg)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top}
+pre,code{font-family:var(--mono);font-size:12px}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;max-width:100%;overflow-x:auto}
+.diff{border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:70vh;max-width:100%}
+.diff div{padding:0 10px;font-family:var(--mono);font-size:12px;white-space:pre}
+.diff .a{background:var(--add)} .diff .d{background:var(--del)} .diff .h{color:var(--accent);font-weight:600;background:var(--hover);padding-top:4px;padding-bottom:4px}
+.md h2,.md h3{font-size:15px;margin:16px 0 6px} .md p{margin:6px 0} .md ul{margin:4px 0;padding-left:20px}
+.md code{background:var(--hover);padding:1px 4px;border-radius:4px}
+.tl div{display:grid;grid-template-columns:62px 100px 1fr;gap:8px;padding:3px 0;border-bottom:1px dashed var(--line);font-size:12px}
+.tl .ty{color:var(--muted)}
+#log{font-family:var(--mono);font-size:12px;max-height:220px;overflow:auto;padding:10px 14px;white-space:pre-wrap;color:var(--muted)}
+.toast{position:fixed;bottom:18px;right:18px;max-width:420px;padding:10px 14px;border-radius:8px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.2);z-index:20;display:none}
+details summary{cursor:pointer;color:var(--muted);padding:8px 14px}
+textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink)}
+.hint{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Factory console</h1><span class="repo" id="repo"></span>
+  <span id="policy"></span>
+  <span class="spacer"></span>
+  <span id="workerChip"></span>
+  <button id="intakeBtn" title="Pull new work items from the ready folder and other sources">Pull work items</button>
+  <button id="workerBtn" class="primary">Run queue</button>
+  <button id="pauseBtn" title="Kill switch: stop all agent work">Pause all</button>
+</header>
+
+<section class="tiles" id="tiles"></section>
+
+<main>
+  <div class="stack">
+    <div class="panel"><h2>Needs you <span class="n" id="nNeeds"></span></h2><div class="list" id="needs"></div></div>
+    <div class="panel"><h2>Working <span class="n" id="nWorking"></span></h2><div class="list" id="working"></div></div>
+    <div class="panel"><h2>Backlog <span class="n" id="nBacklog"></span></h2><div class="list" id="backlog"></div></div>
+    <div class="panel"><details><summary>History: shipped and abandoned (<span id="nHistory">0</span>)</summary><div class="list" id="history"></div></details></div>
+  </div>
+  <div class="stack">
+    <div class="panel" id="detail"><div class="empty" style="padding:30px">Select a job to see why it is where it is, what it changed, and what you can do.</div></div>
+    <div class="panel"><h2>Live log</h2><div id="log"></div></div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = document.querySelector('meta[name=asf-token]').content;
+let S = null, selected = null, tab = 'overview', D = null, busy = false;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = v => v == null ? '–' : '$' + Number(v).toFixed(2);
+const mins = v => v == null ? '–' : (v >= 120 ? (v/60).toFixed(1) + ' h' : Math.round(v) + ' min');
+const ago = t => { const s = Date.now()/1000 - t; return s < 90 ? Math.round(s)+'s ago' : s < 5400 ? Math.round(s/60)+'m ago' : s < 172800 ? Math.round(s/3600)+'h ago' : Math.round(s/86400)+'d ago'; };
+
+const STATE = {
+  awaiting_review:['Ready to review','info'], awaiting_approval:['Needs approval','info'],
+  needs_human:['Stopped: needs you','bad'], failed:['Failed','bad'], paused:['Paused','warn'],
+  done:['Shipped','ok'], rejected:['Abandoned',''], merged:['Merged: verifying','violet'], observing:['Merged: verifying','violet'],
+  merging:['Merging','violet'], queued:['Queued',''], triaged:['Triaged',''], implementing:['Implementing','info'],
+  testing:['Testing','info'], verifying:['Running gates','info'], reviewing:['Reviewing','info'],
+  committing:['Committing','info'], delivering:['Delivering','info'],
+};
+const name = (item, title) => (title || '').startsWith(item) ? title : `${item} · ${title}`;
+const chip = (s) => { const [l,c] = STATE[s] || [s,'']; return `<span class="chip ${c}">${esc(l)}</span>`; };
+const NEEDS = new Set(['awaiting_review','awaiting_approval','needs_human','failed','paused']);
+const HIST = new Set(['done','rejected']);
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json','X-ASF-Token':TOKEN}, body:JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, bad) {
+  const t = $('toast'); t.textContent = msg; t.style.background = bad ? 'var(--bad)' : 'var(--ink)';
+  t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 4500);
+}
+async function post(path, body, label) {
+  try { const r = await api(path, body || {}); toast(r.message || (label + ': ok')); await refresh(); if (selected) await loadDetail(selected); }
+  catch (e) { toast(label + ': ' + e.message, true); }
+}
+
+function tiles(m) {
+  const c = m.counts, t = m.median_minutes;
+  const items = [
+    ['Shipped', c.shipped, 'merged and verified'],
+    ['Waiting on you', (c.awaiting_review||0) + (c.stopped||0), `${c.awaiting_review} to review · ${c.stopped} stopped`],
+    ['In progress', (c.in_progress||0) + (c.verifying||0), `${c.verifying} verifying after merge`],
+    ['Cost per shipped job', money(m.cost_per_shipped_usd), `${money(m.spend_usd.total)} total, all work counted`],
+    ['Waste', Math.round((m.waste_share||0)*100) + '%', `${money(m.spend_usd.abandoned)} on abandoned jobs`],
+    ['Lead time (median)', mins(t.lead_time), `agents ${mins(t.agent_time)} · review wait ${mins(t.review_wait)}`],
+    ['Interventions', m.interventions, m.interventions_per_shipped == null ? 'times a job stopped for you' : `${m.interventions_per_shipped} per shipped job`],
+  ];
+  $('tiles').innerHTML = items.map(([k,v,s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join('');
+}
+
+function jobRow(j) {
+  const why = j.state === 'awaiting_review' ? (j.owner_review ? 'Touches owner-only code: review those lines' : 'Delivered: review and merge')
+    : j.reason || (j.running ? 'running now' : '');
+  return `<div class="row ${selected===j.id?'sel':''}" onclick="select('${j.id}')">
+    <div class="t">${esc(name(j.item, j.title))}</div><div>${chip(j.state)}</div>
+    <div class="m">${j.running ? '<span class="chip info"><span class="dot pulse"></span>running</span> ' : ''}${j.owner_review ? '<span class="chip violet">owner review</span> ' : ''}${esc(why)} · ${money(j.cost)} · ${ago(j.updated)}</div></div>`;
+}
+
+function render() {
+  $('repo').textContent = S.repo + ' @ ' + S.default_branch;
+  $('policy').innerHTML = S.shadow ? '<span class="chip">shadow mode: you merge everything</span>'
+    : `<span class="chip ok">auto-merge up to tier ${esc(S.max_merge_tier)}</span>`;
+  const w = S.worker;
+  $('workerChip').innerHTML = S.paused ? `<span class="chip bad">${esc(S.paused)}</span>`
+    : w.running ? `<span class="chip info"><span class="dot pulse"></span>working${w.current ? ' on ' + esc(w.current) : ''}</span>` : '<span class="chip">idle</span>';
+  $('workerBtn').textContent = w.running ? 'Stop after this step' : 'Run queue';
+  $('workerBtn').className = w.running ? '' : 'primary';
+  $('pauseBtn').textContent = S.paused ? 'Resume all' : 'Pause all';
+  tiles(S.metrics);
+  const needs = S.jobs.filter(j => NEEDS.has(j.state));
+  const working = S.jobs.filter(j => !NEEDS.has(j.state) && !HIST.has(j.state));
+  const hist = S.jobs.filter(j => HIST.has(j.state));
+  $('needs').innerHTML = needs.map(jobRow).join('') || '<div class="empty">Nothing is waiting on you.</div>';
+  $('working').innerHTML = working.map(jobRow).join('') || '<div class="empty">No agent work in progress. Queue a backlog item, then Run queue.</div>';
+  $('history').innerHTML = hist.map(jobRow).join('') || '<div class="empty">Nothing yet.</div>';
+  $('nNeeds').textContent = needs.length; $('nWorking').textContent = working.length; $('nHistory').textContent = hist.length;
+  const ready = S.backlog.filter(b => b.ready), blocked = S.backlog.filter(b => !b.ready);
+  $('nBacklog').textContent = S.backlog.length ? `${ready.length} unblocked · ${blocked.length} blocked` : '';
+  $('backlog').innerHTML = S.backlog.length ? [...ready, ...blocked].map(b => `<div class="row" style="cursor:default">
+      <div class="t">${esc(name(b.id, b.title))}</div>
+      <div>${b.ready ? `<button class="small primary" onclick="queueItem('${b.id}')">Queue</button>` : '<span class="chip">blocked</span>'}</div>
+      <div class="m">${b.ready ? 'All dependencies shipped' : 'Waiting for ' + b.blocked_by.map(esc).join(', ')}</div></div>`).join('')
+    : '<div class="empty">No backlog folder configured (intake.local.backlog), or it is empty.</div>';
+  $('log').textContent = S.log.join('\n');
+}
+
+async function refresh() {
+  try { S = await api('/api/state'); render(); } catch (e) { $('workerChip').innerHTML = `<span class="chip bad">console offline: ${esc(e.message)}</span>`; }
+}
+
+async function select(id) { selected = id; tab = 'overview'; render(); await loadDetail(id); }
+async function loadDetail(id) {
+  try { D = await api('/api/jobs/' + id); renderDetail(); } catch (e) { toast(e.message, true); }
+}
+
+const ACTION = {
+  merge:   ['Merge to ' , 'primary', 'Merges the branch, then runs the post-merge checks. The job is done only when they pass.'],
+  approve: ['Approve', 'primary', 'Records your approval; the factory merges and verifies.'],
+  revise:  ['Send back with notes', '', 'The implementer works on top of this branch to address your notes.'],
+  resume:  ['Resume', 'primary', 'Continues where it paused, with more time.'],
+  retry:   ['Retry', 'primary', 'Re-enters at the step that stopped (gates rerun on the same work).'],
+  run:     ['Run now', '', 'Runs this job until it finishes or stops.'],
+  rerun:   ['Start over', '', 'Cancels this job and starts the item again from the current default branch.'],
+  reject:  ['Reject', 'danger', 'Gives up on this job. Its cost counts as waste.'],
+};
+async function doAction(a) {
+  let body = {};
+  if (a === 'reject') { const r = prompt('Why reject this job? (kept in the record)'); if (r === null) return; body.reason = r; }
+  if (a === 'rerun' && !confirm('Cancel this job and start the work item over from the current default branch?')) return;
+  if (a === 'revise') { const n = $('reviseNotes') && $('reviseNotes').value.trim(); if (!n) { tab = 'revise'; renderDetail(); return; } body.notes = n; }
+  if (a === 'merge' && !confirm('Merge this branch into ' + S.default_branch + ' now?')) return;
+  await post(`/api/jobs/${D.id}/${a}`, body, a);
+}
+
+function renderDiff(patch) {
+  if (!patch) return '<div class="hint">No diff available.</div>';
+  return '<div class="diff">' + patch.split('\n').map(l => {
+    const c = l.startsWith('diff --git') || l.startsWith('@@') ? 'h' : (l.startsWith('+') && !l.startsWith('+++')) ? 'a' : (l.startsWith('-') && !l.startsWith('---')) ? 'd' : '';
+    return `<div class="${c}">${esc(l) || ' '}</div>`; }).join('') + '</div>';
+}
+function md(src) {
+  const out = []; let code = false, list = false;
+  for (const raw of (src || '').split('\n')) {
+    if (raw.startsWith('```')) { if (list) { out.push('</ul>'); list = false; } out.push(code ? '</pre>' : '<pre style="background:var(--hover);padding:8px;border-radius:6px">'); code = !code; continue; }
+    if (code) { out.push(esc(raw) + '\n'); continue; }
+    const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+    if (/^\s*[-*] /.test(raw)) { if (!list) { out.push('<ul>'); list = true; } out.push('<li>' + inline(raw.replace(/^\s*[-*] (\[[ x]\] )?/, m => m.includes('[x]') ? '☑ ' : m.includes('[ ]') ? '☐ ' : '')) + '</li>'); continue; }
+    if (list) { out.push('</ul>'); list = false; }
+    const h = raw.match(/^(#{1,4}) (.*)/);
+    if (h) { out.push(`<h3>${inline(h[2])}</h3>`); continue; }
+    if (raw.startsWith('|')) { out.push(`<pre>${esc(raw)}</pre>`); continue; }
+    if (raw.trim()) out.push('<p>' + inline(raw) + '</p>');
+  }
+  if (list) out.push('</ul>'); if (code) out.push('</pre>');
+  return '<div class="md">' + out.join('') + '</div>';
+}
+
+function overview() {
+  const d = D.data, parts = [];
+  if (d.needs_human_reason && D.state === 'needs_human') parts.push(`<div class="callout bad"><b>Why it stopped</b>\n${esc(d.needs_human_reason)}</div>`);
+  if (d.paused_reason && D.state === 'paused') parts.push(`<div class="callout warn"><b>Why it paused</b>\n${esc(d.paused_reason)}</div>`);
+  if (d.error && D.state === 'failed') parts.push(`<div class="callout bad"><b>Error</b>\n${esc(d.error)}</div>`);
+  if (D.state === 'awaiting_review') parts.push(`<div class="callout ok"><b>Delivered, not shipped yet.</b> Review the change, then merge it here or with git. The job counts as done only after the post-merge checks pass.</div>`);
+  const o = d.owner_review;
+  if (o && (o.files?.length || o.notes)) parts.push(`<div class="sec"><div class="callout violet"><b>Owner review: the lines only you can approve</b>${o.notes ? '\n' + esc(o.notes) : ''}${o.files?.length ? '\nFiles: ' + o.files.map(esc).join(', ') : ''}</div>${renderDiff(o.diff)}</div>`);
+  if (d.feedback) parts.push(`<div class="sec"><h4>Reviewer findings</h4><pre>${esc(d.feedback)}</pre></div>`);
+  if (d.manual_verification?.length) parts.push(`<div class="sec"><h4>Manual checks the factory asks you to do</h4><ul>${d.manual_verification.map(m => `<li>${esc(m)}</li>`).join('')}</ul></div>`);
+  if (d.post_merge) parts.push(`<div class="sec"><h4>Post-merge checks</h4><span class="chip ${d.post_merge.status==='pass'?'ok':'bad'}">${esc(d.post_merge.status)}</span>${d.post_merge.detail ? `<pre style="margin-top:6px">${esc(d.post_merge.detail)}</pre>` : ''}</div>`);
+  if (d.gates?.length) parts.push(`<div class="sec"><h4>Gates</h4><table>${d.gates.map(g => `<tr><td>${esc(g.name)}</td><td>${chip(g.status==='pass'?'done':g.status==='fail'?'failed':'queued').replace(/>[^<]+</, '>' + esc(g.status) + '<')}</td><td>${esc(g.detail)}</td></tr>`).join('')}</table></div>`);
+  const rv = d.reviews || {};
+  if (Object.keys(rv).length) parts.push(`<div class="sec"><h4>Reviews</h4>${Object.entries(rv).map(([r, v]) => `<p><b>${esc(r)}</b>: ${esc(v.verdict)}. ${esc(v.summary || '')}</p>`).join('')}</div>`);
+  if (d.implementer) parts.push(`<div class="sec"><h4>Implementer's summary</h4><pre>${esc(d.implementer)}</pre></div>`);
+  const cost = Object.entries(D.cost_by_role).map(([r, c]) => `${r} ${money(c)}`).join(' · ');
+  parts.push(`<div class="hint">Cost: ${cost || '–'}${d.branch ? ' · branch <code>' + esc(d.branch) + '</code>' : ''}</div>`);
+  return parts.join('') || '<div class="hint">No details yet.</div>';
+}
+
+function renderDetail() {
+  if (!D) return;
+  const acts = D.actions.map(a => { const [l, c, h] = ACTION[a] || [a, '', '']; return `<button class="${c}" title="${esc(h)}" onclick="doAction('${a}')">${esc(a === 'merge' ? l + S.default_branch : l)}</button>`; }).join('');
+  const t = (k, l) => `<button class="tab ${tab===k?'on':''}" onclick="tab='${k}';renderDetail()">${l}</button>`;
+  let body = '';
+  if (tab === 'overview') body = overview();
+  if (tab === 'diff') body = `<pre class="hint" style="margin-bottom:8px">${esc(D.diff.stat || '')}</pre>${renderDiff(D.diff.patch)}${D.diff.truncated ? '<div class="hint">Diff truncated.</div>' : ''}`;
+  if (tab === 'report') body = D.report ? md(D.report) : '<div class="hint">No report yet (written when the job commits).</div>';
+  if (tab === 'timeline') body = '<div class="tl">' + D.events.slice().reverse().map(e => `<div><span class="ty">${new Date(e.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span><span class="ty">${esc(e.type)}</span><span>${esc(e.summary)}</span></div>`).join('') + '</div>';
+  if (tab === 'revise') body = `<p class="hint">Notes for the implementer, one per line. It works on top of the delivered branch and addresses only these.</p><textarea id="reviseNotes" placeholder="e.g. Rename tokenKey to TokenKey and document it"></textarea><div class="actions"><button class="primary" onclick="doAction('revise')">Send back</button></div>`;
+  $('detail').innerHTML = `<div class="dhead"><h3>${esc(name(D.item, D.title))}</h3>
+    <div class="meta">${chip(D.state)}<span>${esc(D.id)}</span><span>tier ${esc(D.tier ?? '–')}</span><span>updated ${ago(D.updated)}</span></div>
+    <div class="actions">${acts || '<span class="hint">Nothing to do: the factory is working on it or it is finished.</span>'}</div></div>
+    <div class="tabs">${t('overview','Overview')}${t('diff','Diff')}${t('report','Report')}${t('timeline','Timeline')}${D.actions.includes('revise') ? t('revise','Revise') : ''}</div>
+    <div class="body">${body}</div>`;
+}
+
+async function queueItem(id) { await post(`/api/backlog/${id}/queue`, {}, 'queue ' + id); }
+$('workerBtn').onclick = () => S.worker.running ? post('/api/worker/stop', {}, 'stop') : post('/api/worker/start', {}, 'run queue');
+$('pauseBtn').onclick = () => S.paused ? post('/api/resume-all', {}, 'resume all') : post('/api/pause-all', {reason: 'paused from the console'}, 'pause all');
+$('intakeBtn').onclick = () => post('/api/intake', {}, 'pull work items');
+
+refresh();
+setInterval(async () => { await refresh(); if (selected && tab !== 'revise' && !busy) loadDetail(selected); }, 4000);
+</script>
+</body>
+</html>

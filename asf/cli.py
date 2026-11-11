@@ -326,6 +326,12 @@ def cmd_pause_all(app: App, on: bool) -> int:
     return 0
 
 
+def cmd_ui(app: App) -> int:
+    from .ui import serve as serve_ui
+    serve_ui(app.factory, app.args.port, open_browser=app.args.open)
+    return 0
+
+
 def cmd_serve(app: App) -> int:
     from .server import serve
     serve(app.factory, app.args.port, app.secret("ASF_ADMIN_TOKEN"), app.args.worker)
@@ -389,6 +395,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("job", nargs="?")
     s.add_argument("--jsonl", action="store_true")
     sub.add_parser("report", help="factory metrics (counts only shipped work)").add_argument("--json", action="store_true")
+    p_ui = sub.add_parser("ui", help="local web console: observe jobs and act on them")
+    p_ui.add_argument("--port", type=int, default=8787)
+    p_ui.add_argument("--open", action="store_true", help="open the console in a browser")
     for name in ("approve", "reject"):
         s = sub.add_parser(name)
         s.add_argument("job")
@@ -430,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     app = App(args)
     handlers = {
         "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
-        "status": cmd_status, "events": cmd_events, "report": cmd_report,
+        "status": cmd_status, "events": cmd_events, "report": cmd_report, "ui": cmd_ui,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
         "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "publish": cmd_publish,
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),

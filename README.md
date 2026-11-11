@@ -39,6 +39,39 @@ so nothing merges until you raise `autonomy.max_merge_tier` in a reviewed change
 Zero-infrastructure mode on GitHub: `asf ci-workflow --write` generates a workflow that
 runs the whole factory inside GitHub Actions when an issue gets the `factory` label.
 
+## The console
+
+```bash
+asf --repo ~/code/myapp ui --open      # http://127.0.0.1:8787
+```
+
+A local web page (bound to 127.0.0.1, with a per-process token on every action) that shows what
+needs you, what agents are doing, the backlog with dependencies resolved, and the factory's
+metrics. Each job has its reason for stopping, the owner-review lines, reviewer findings, the
+diff, the report and a timeline of agent tool calls. Every owner action is a button: run the
+queue, merge, send back with notes, reject, resume, retry, start over, queue a backlog item,
+pause everything. A background reconciler notices merges made outside the factory and
+verifies them.
+
+## Job states: delivered is not done
+
+```
+queued -> triaged -> implementing -> testing -> verifying -> reviewing -> committing -> delivering
+  -> awaiting_review (a person reviews; or awaiting_approval -> merging when the agent may merge)
+  -> merged   (on the default branch: observe.post_merge commands run there, then the deploy gate)
+  -> done     (shipped: the only state that counts as output)
+```
+
+The factory notices a merge however it was made, and a deleted branch counts as abandoned.
+`asf report` (and the console) count only shipped work: cost per shipped job is all spend
+divided by shipped jobs, abandoned spend is reported as waste, and lead time is split into
+agent time, review wait and post-merge verification.
+
+**Owner review.** Paths only the owner approves (`owner_review.paths`, else every tier-3 rule)
+are pulled out at commit time with exactly their diff and the agent's `OWNER REVIEW:` notes.
+The report and the console lead with them, so the owner reviews a small diff instead of
+writing the change.
+
 ## Commands
 
 | Command | What it does |
@@ -48,7 +81,8 @@ runs the whole factory inside GitHub Actions when an issue gets the `factory` la
 | `intake [--source S] [--id ID] [--rerun]` | Pulls work items from enabled intake adapters. Deduplicates by source and id: an item that already has a job, finished or not, is skipped, so a labelled issue is never rebuilt by accident. `--rerun` starts a new job for an item whose last job has ended. |
 | `add --title ... [--accept ...]` | Queues a work item by hand. |
 | `run [--job ID] [--all] [--stop-at STATE]` | Drives jobs through the state machine. Resumable after a crash. |
-| `status [JOB]`, `events JOB [--jsonl]`, `report` | Job list, full audit trail of every agent tool call, metrics. |
+| `status [JOB]`, `events JOB [--jsonl]`, `report [--json]` | Job list, full audit trail of every agent tool call, metrics that count only shipped work. |
+| `ui [--port N] [--open]` | The local web console (see above). |
 | `approve` / `reject JOB` | Human approval for tiers that require it. |
 | `resume JOB [--extra-usd N]`, `retry JOB` | Continue a budget-paused job, or re-enter a failed one from a clean sandbox. |
 | `revise JOB --note "..." [--notes-file F] [--extra-usd N]` | Send a delivered, unmerged job back with review notes. The implementer works on top of the delivered commit on the same branch, then the tester, gates and reviewers run again over the whole change, and one new commit is added. Each revision gets a fresh budget. Follow with `run --job JOB`. |

@@ -657,11 +657,24 @@ class Factory:
                  shell=False).ok
         return "merged" if ok else "open"
 
+    def _merge_time(self, branch: str) -> float | None:
+        """When the branch reached the default branch: the oldest commit on the default branch
+        that contains its tip (the merge commit, or the tip itself for a fast-forward)."""
+        tip = git(self.repo, "rev-parse", f"refs/heads/{branch}", check=False).strip()
+        if not tip:
+            return None
+        out = git(self.repo, "log", "--ancestry-path", "--format=%ct", f"{tip}..{self.cfg.default_branch}",
+                  check=False).split()
+        if out:
+            return float(out[-1])
+        return float(git(self.repo, "log", "-1", "--format=%ct", tip).strip() or 0) or None
+
     def _review_settled(self, job: dict[str, Any]) -> bool:
         """Notice a human merge (however it was done) or an abandoned branch."""
         status = self._branch_status(job["data"].get("branch"))
         if status == "merged":
-            self.store.update_job(job["id"], "merged", merged_at=time.time(), merged_by="human")
+            when = self._merge_time(job["data"]["branch"]) or time.time()
+            self.store.update_job(job["id"], "merged", merged_at=when, merged_by="human")
             self.store.event(job["id"], "job.merged", "human", {"branch": job["data"].get("branch")})
             return True
         if status == "gone":
@@ -743,7 +756,7 @@ class Factory:
         n = 0
         for job in self.store.jobs(["done"]):
             if job["data"].get("outcome") == "delivered for human merge":
-                self.store.update_job(job["id"], "awaiting_review", outcome="",
+                self.store.update_job(job["id"], "awaiting_review", outcome="", migrated=True,
                                       delivered_at=job["data"].get("delivered_at") or job["updated"])
                 n += 1
         return n

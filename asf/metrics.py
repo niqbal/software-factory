@@ -58,7 +58,7 @@ def compute(store: Store) -> dict[str, Any]:
         counts[b] += 1
         spend[b] += cost.get(j["id"], 0.0)
         d = j["data"]
-        if j["state"] == "done":
+        if j["state"] == "done" and not d.get("migrated"):  # migrated jobs predate the timestamps
             lead.append(_minutes(j["created"], d.get("done_at")))
             agent.append(_minutes(j["created"], d.get("delivered_at")))
             review.append(_minutes(d.get("delivered_at"), d.get("merged_at")))
