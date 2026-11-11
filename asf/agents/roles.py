@@ -63,7 +63,10 @@ def run_agent(provider: ModelProvider, cfg: Config, role: str, system: str, task
     """
     spec = cfg.role_model(role)
     max_turns = max_turns or cfg.get(f"models.max_turns.{role}", 40)
-    conv = provider.conversation(spec["model"], system, broker.tools(), spec.get("effort", "medium"))
+    if hasattr(provider, "conversation_for"):  # a pool routes each role to a backend
+        conv = provider.conversation_for(role, system, broker.tools())
+    else:
+        conv = provider.conversation(spec["model"], system, broker.tools(), spec.get("effort", "medium"))
     conv.add_user(task)
     result = AgentResult(role=role, ok=False, summary="")
     nudged = False

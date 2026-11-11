@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 LIMIT_PATTERNS = [re.compile(p, re.I) for p in (
@@ -51,3 +52,58 @@ def reset_time(text: str, now: datetime | None = None) -> datetime:
         if when <= local_now:
             when += timedelta(days=1)
     return when + timedelta(minutes=1)  # a minute of slack past the stated reset
+
+
+# ---- per-backend limit state, shared by every project (they share subscriptions) ----------
+
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+import threading as _threading  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_lock = _threading.Lock()
+
+
+def _state_file() -> _Path:
+    return _Path(_os.environ.get("ASF_HOME", "~/.asf")).expanduser() / "limits.json"
+
+
+def _load() -> dict[str, Any]:
+    try:
+        return _json.loads(_state_file().read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def record_limit(backend: str, until: datetime, reason: str = "") -> None:
+    with _lock:
+        data = _load()
+        data[backend] = {"until": until.isoformat(), "reason": reason[:300]}
+        _state_file().parent.mkdir(parents=True, exist_ok=True)
+        _state_file().write_text(_json.dumps(data, indent=1))
+
+
+def limited_until(backend: str, now: datetime | None = None) -> datetime | None:
+    """When the backend's limit lifts, or None if it is usable now."""
+    entry = _load().get(backend)
+    if not entry:
+        return None
+    until = datetime.fromisoformat(entry["until"])
+    return until if until > (now or datetime.now().astimezone()) else None
+
+
+def all_limits() -> dict[str, dict[str, Any]]:
+    now = datetime.now().astimezone()
+    return {b: e for b, e in _load().items() if datetime.fromisoformat(e["until"]) > now}
+
+
+def backend_of_error(text: str) -> str:
+    """Which backend an error came from, by the message each provider writes."""
+    t = text or ""
+    for marker, name in (("[backend:", None), ("cursor-agent", "cursor"), ("claude -p", "claude"),
+                         ("anthropic", "anthropic")):
+        if marker in t:
+            if name is None:
+                return t.split("[backend:", 1)[1].split("]", 1)[0]
+            return name
+    return "claude"

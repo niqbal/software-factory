@@ -201,8 +201,12 @@ class Console:
         if d.get("report") and Path(d["report"]).exists():
             report = Path(d["report"]).read_text()
         by_role: dict[str, float] = {}
+        backend_by_role: dict[str, str] = {}
         for r in st.runs(job_id):
             by_role[r["role"]] = round(by_role.get(r["role"], 0) + r["cost_usd"], 2)
+            model = r.get("model") or ""
+            backend_by_role[r["role"]] = model.split(":", 1)[0] if ":" in model else \
+                ("claude" if model.startswith("claude") else model)
         events = [{"at": e["ts"], "type": e["type"],
                    "actor": e["actor"], "summary": _summarize(e)} for e in st.events(job_id)][-120:]
         keep = ("needs_human_reason", "paused_reason", "error", "feedback", "manual_verification", "gates",
@@ -211,7 +215,7 @@ class Console:
                 "merged_by", "outcome", "triage")
         return {"id": job_id, "item": item[0], "title": item[1], "state": j["state"], "tier": j["tier"],
                 "created": j["created"], "updated": j["updated"], "data": {k: d.get(k) for k in keep},
-                "report": report, "cost_by_role": by_role, "events": events,
+                "report": report, "cost_by_role": by_role, "backend_by_role": backend_by_role, "events": events,
                 "diff": self.diff(j), "actions": self.actions(j)}
 
     def diff(self, j: dict[str, Any]) -> dict[str, Any]:

@@ -21,9 +21,11 @@ class FakeStore:
 
 
 class FakeFactory:
-    def __init__(self, jobs):
+    def __init__(self, jobs, models=None):
         self.store = FakeStore(jobs)
         self.retried = []
+        m = models or {"provider": "claude_code"}
+        self.cfg = SimpleNamespace(get=lambda k, d=None: m if k == "models" else d)
 
     def paused(self):
         return None
@@ -36,9 +38,9 @@ class FakeFactory:
         self.store.job(job_id)["state"] = "implementing"
 
 
-def project(key, prio, jobs):
+def project(key, prio, jobs, models=None):
     p = SimpleNamespace(key=key, priority=prio, archived=False, available=True, hidden=False)
-    c = SimpleNamespace(f=FakeFactory(jobs), busy=set(), current=None)
+    c = SimpleNamespace(f=FakeFactory(jobs, models), busy=set(), current=None)
     return p, c
 
 
@@ -85,17 +87,30 @@ def test_settings_validated_and_persisted(portfolio):
     assert sched_mod.load_settings()["concurrency"] == 8
 
 
-def test_usage_limit_pauses_all_and_resumes_interrupted_jobs(portfolio):
+def test_claude_limit_blocks_claude_only_projects_until_reset(portfolio):
     sched_mod.save_settings(mode="priority", auto_resume=True)
     s = Scheduler(portfolio)
     c = portfolio.console("b")
     c.f.store.job("b1")["state"] = "failed"
-    s._hit_limit("b", "b1", "reviewing: You've hit your 5-hour limit · resets 1pm (Asia/Karachi)")
-    assert s._limited() and "usage limit" in s.idle_reason
-    s.limited_until = datetime.now().astimezone() - timedelta(seconds=1)   # the reset has passed
-    assert not s._limited()
+    s._hit_limit("b", "b1", "reviewing: claude -p error: You've hit your 5-hour limit · resets 1pm (Asia/Karachi)")
+    assert limits.limited_until("claude") is not None
+    assert s.limit_jobs == [("b", "b1")] and not c.f.retried      # claude-only project waits
+    assert picked(s, 3) == []                                       # a and b are both claude-only
+    limits.record_limit("claude", datetime.now().astimezone() - timedelta(seconds=1))
     s._resume_limited()
-    assert c.f.retried == ["b1"] and s.limited_until is None
+    assert c.f.retried == ["b1"] and s.limit_jobs == []
+
+
+def test_pooled_project_moves_to_the_other_backend_at_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASF_HOME", str(tmp_path))
+    pool = {"provider": "pool", "backends": {"claude": {}, "cursor": {}}}
+    a = project("a", 1, [job("a1", "failed")], models=pool)
+    pf = SimpleNamespace(projects=lambda: [a[0]], console=lambda k: a[1])
+    sched_mod.save_settings(auto_resume=True)
+    s = Scheduler(pf)
+    s._hit_limit("a", "a1", "implementing: [backend:claude] claude -p error: hit your 5-hour limit · resets 1pm")
+    assert a[1].f.retried == ["a1"]                                  # cursor is free: retried immediately
+    assert limits.backend_of_error("[backend:cursor] cursor-agent error: x") == "cursor"
 
 
 def test_limit_detection():

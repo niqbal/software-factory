@@ -430,9 +430,13 @@ class Factory:
     def _s_queued(self, job: dict[str, Any]) -> None:
         item = self._item(job)
         spec = self.cfg.role_model("triage")
-        triage, turn = self.provider.structured(
-            spec["model"], PromptBuilder(self.cfg, self.repo).system("triage", 1),
-            work_item_block(item, item.acceptance), TRIAGE_SCHEMA, spec.get("effort", "low"))
+        system = PromptBuilder(self.cfg, self.repo).system("triage", 1)
+        if hasattr(self.provider, "structured_for"):
+            triage, turn = self.provider.structured_for("triage", system, work_item_block(item, item.acceptance),
+                                                        TRIAGE_SCHEMA)
+        else:
+            triage, turn = self.provider.structured(spec["model"], system, work_item_block(item, item.acceptance),
+                                                    TRIAGE_SCHEMA, spec.get("effort", "low"))
         self._charger(job["id"])("triage", turn)
         pre = policy.pre_tier(self.cfg, item, triage.get("tier_guess"))
         acceptance = item.acceptance or triage.get("acceptance_criteria", [])

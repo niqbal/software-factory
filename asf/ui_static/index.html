@@ -297,7 +297,7 @@ function overview() {
   const rv = d.reviews || {};
   if (Object.keys(rv).length) parts.push(`<div class="sec"><h4>Reviews</h4>${Object.entries(rv).map(([r, v]) => `<p><b>${esc(r)}</b>: ${esc(v.verdict)}. ${esc(v.summary || '')}</p>`).join('')}</div>`);
   if (d.implementer) parts.push(`<div class="sec"><h4>Implementer's summary</h4><pre>${esc(d.implementer)}</pre></div>`);
-  const cost = Object.entries(D.cost_by_role).map(([r, c]) => `${r} ${money(c)}`).join(' · ');
+  const cost = Object.entries(D.cost_by_role).map(([r, c]) => `${r} ${money(c)}${D.backend_by_role?.[r] ? ' (' + esc(D.backend_by_role[r]) + ')' : ''}`).join(' · ');
   parts.push(`<div class="hint">Cost: ${cost || '–'}${d.branch ? ' · branch <code>' + esc(d.branch) + '</code>' : ''}</div>`);
   return parts.join('') || '<div class="hint">No details yet.</div>';
 }
@@ -374,6 +374,9 @@ function renderScheduler(sc) {
       <span class="spacer"></span>
       ${sc.running ? '<button onclick="post(\'/api/scheduler/stop\', {}, \'stop\')">Stop</button>' : '<button class="primary" onclick="post(\'/api/scheduler/start\', {}, \'start\')">Start scheduler</button>'}</div>
     <div class="hint">${esc(MODE_HELP[sc.mode] || '')}</div>
+    <div><b>Backends:</b> ${Object.entries(sc.backends || {}).map(([b, u]) => u
+        ? `<span class="chip warn">${esc(b)}: limited until ${new Date(u).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>`
+        : `<span class="chip ok">${esc(b)}: available</span>`).join(' ') || '–'}</div>
     <div><b>Running:</b> ${jobs}${sc.waiting_to_resume ? ` · ${sc.waiting_to_resume} job(s) resume after the limit` : ''}</div>
     ${sc.log.length ? `<details><summary style="padding:0">Scheduler log</summary><pre style="margin-top:6px">${esc(sc.log.slice(-12).join('\n'))}</pre></details>` : ''}`;
 }

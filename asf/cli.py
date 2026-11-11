@@ -155,6 +155,14 @@ def cmd_doctor(app: App) -> int:
         key_env = cfg.get("models.api_key_env", "ANTHROPIC_API_KEY")
         check(bool(app.secret(key_env)), f"{key_env} available (value not shown)",
               f"{key_env} not set; pass --env-file or export it", fatal=True)
+    elif cfg.get("models.provider") == "pool":
+        from .adapters.models.pool import PoolProvider
+        pool = PoolProvider(cfg.get("models") or {}, None)
+        for name, prov in pool.backends.items():
+            problem = prov.credentials_problem()
+            check(not problem, f"backend {name} ({prov.kind}) ready", f"backend {name}: {problem}", fatal=False)
+        for role in ("triage", "implementer", "tester", "reviewer", "security", "ci_fixer"):
+            print(f"  info  {role}: {' -> '.join(pool.order(role))}")
     elif cfg.get("models.provider") == "claude_code":
         from .adapters.models.claude_code import find_binary
         b = find_binary(cfg.get("models") or {})

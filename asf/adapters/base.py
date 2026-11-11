@@ -270,6 +270,8 @@ BUILTIN: dict[str, dict[str, str]] = {
         "anthropic": "asf.adapters.models.anthropic_provider:AnthropicProvider",
         "scripted": "asf.adapters.models.scripted:ScriptedProvider",
         "claude_code": "asf.adapters.models.claude_code:ClaudeCodeProvider",
+        "cursor_cli": "asf.adapters.models.cursor_cli:CursorProvider",
+        "pool": "asf.adapters.models.pool:PoolProvider",
     },
 }
 
