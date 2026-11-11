@@ -258,3 +258,12 @@ def test_retry_after_gate_failure_resumes_at_verification(invoice_repo, state, s
     assert f2.retry(job_id) == "verifying"
     assert f2.run_job(job_id) == "done"
     assert [r for r, _ in prov.log].count("implementer") == implementer_calls
+
+
+def test_resume_can_extend_the_time_budget(invoice_repo, state, store):
+    f = factory(invoice_repo, state, store, provider(), **{f"budgets.tier_{t}.minutes": 0 for t in range(4)})
+    job_id, _ = f.submit(item())
+    assert f.run_job(job_id) == "paused"
+    assert "minutes" in store.job(job_id)["data"].get("pause_reason", "") or store.job(job_id)["state"] == "paused"
+    f.resume(job_id, extra_minutes=60)
+    assert f.run_job(job_id) == "done"

@@ -267,7 +267,7 @@ def cmd_approve(app: App, decision: str) -> int:
 
 
 def cmd_resume(app: App) -> int:
-    app.factory.resume(app.args.job, app.args.extra_usd)
+    app.factory.resume(app.args.job, app.args.extra_usd, app.args.extra_minutes)
     print(f"{app.args.job} resumed; run `asf run --job {app.args.job}`")
     return 0
 
@@ -403,6 +403,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("resume")
     s.add_argument("job")
     s.add_argument("--extra-usd", type=float, default=0.0)
+    s.add_argument("--extra-minutes", type=float, default=0.0,
+        help="extend the time budget, e.g. after time spent paused")
     s = sub.add_parser("retry", help="re-enter a failed or needs_human job at the failing step")
     s.add_argument("job")
     s = sub.add_parser("revise", help="send a delivered, unmerged job back with review notes")

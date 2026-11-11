@@ -163,12 +163,13 @@ class Factory:
                 self.notify("failed", self.store.job(job_id), f"{state}: {e}")
                 return "failed"
 
-    def resume(self, job_id: str, extra_usd: float = 0.0) -> None:
+    def resume(self, job_id: str, extra_usd: float = 0.0, extra_minutes: float = 0.0) -> None:
         job = self.store.job(job_id)
         if job["state"] != "paused":
             raise ValueError(f"{job_id} is {job['state']}, not paused")
         self.store.update_job(job_id, job["data"].get("resume_state", "queued"),
-                              extra_budget_usd=job["data"].get("extra_budget_usd", 0) + extra_usd)
+                              extra_budget_usd=job["data"].get("extra_budget_usd", 0) + extra_usd,
+                              extra_minutes=job["data"].get("extra_minutes", 0) + extra_minutes)
 
     def retry(self, job_id: str) -> str:
         """Re-enter a failed or needs_human job at the step that stopped it."""
