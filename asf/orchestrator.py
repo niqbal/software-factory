@@ -674,6 +674,8 @@ class Factory:
         status = self._branch_status(job["data"].get("branch"))
         if status == "merged":
             when = self._merge_time(job["data"]["branch"]) or time.time()
+            # git times have one-second resolution; a merge can't precede its own delivery
+            when = max(when, job["data"].get("delivered_at") or 0)
             self.store.update_job(job["id"], "merged", merged_at=when, merged_by="human")
             self.store.event(job["id"], "job.merged", "human", {"branch": job["data"].get("branch")})
             return True
