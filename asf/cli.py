@@ -85,6 +85,8 @@ class App:
     def factory(self) -> Factory:
         if self._factory is None:
             store = Store(self.state_dir / "factory.db")
+            from .projects import record
+            record(self.state_dir, self.repo)
             self._factory = Factory(self.repo, self.cfg, self.state_dir, store, secrets=self.secret,
                                     echo=lambda m: print(m, flush=True))
         return self._factory
@@ -328,7 +330,11 @@ def cmd_pause_all(app: App, on: bool) -> int:
 
 def cmd_ui(app: App) -> int:
     from .ui import serve as serve_ui
-    serve_ui(app.factory, app.args.port, open_browser=app.args.open)
+    open_project = None
+    if app.args.repo != "." or (app.repo / "factory.yaml").exists():
+        app.factory  # registers this repo's state dir so the console lists it
+        open_project = app.state_dir.name
+    serve_ui(app.args.port, open_project=open_project, open_browser=app.args.open, secrets=app.secret)
     return 0
 
 

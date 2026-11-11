@@ -39,13 +39,14 @@ button.danger{color:var(--bad)} button.small{padding:3px 9px;font-size:12px}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .tile .k{color:var(--muted);font-size:12px} .tile .v{font-size:22px;font-weight:650;margin-top:2px}
 .tile .s{color:var(--muted);font-size:12px;margin-top:2px}
-main{display:grid;grid-template-columns:minmax(320px,430px) minmax(0,1fr);gap:14px;padding:12px 20px 20px;align-items:start}
-@media (max-width:900px){main{grid-template-columns:1fr}}
+main{display:grid;grid-template-columns:minmax(0,430px) minmax(0,1fr);gap:14px;padding:12px 20px 20px;align-items:start}
+@media (max-width:900px){main{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:600px){header,.tiles,.cards,.home-main,main{padding-left:12px;padding-right:12px}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .panel h2{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0;padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
 .panel h2 .n{margin-left:auto;font-weight:600}
 .list{max-height:none}
-.row{padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:2px 8px}
+.row{padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px}
 .row:last-child{border-bottom:none}
 .row:hover{background:var(--hover)} .row.sel{background:var(--info-bg)}
 .row .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -80,18 +81,40 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;max-width:100%;overflow-
 details summary{cursor:pointer;color:var(--muted);padding:8px 14px}
 textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink)}
 .hint{color:var(--muted);font-size:12px}
+.crumb{color:var(--muted);cursor:pointer;text-decoration:none} .crumb:hover{color:var(--accent)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:12px;padding:12px 20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:pointer}
+.card:hover{border-color:var(--accent)} .card.archived{opacity:.55}
+.card h3{margin:0 0 4px;font-size:15px;display:flex;gap:8px;align-items:center}
+.card .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.card .grid div{background:var(--bg);border-radius:7px;padding:6px 8px} .card .grid b{display:block;font-size:17px}
+.card .grid span{font-size:11px;color:var(--muted)}
+.home-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);min-width:0;gap:14px;padding:4px 20px 20px;align-items:start}
+@media (max-width:900px){.home-main{grid-template-columns:1fr}}
+.tag{font-size:11px;font-weight:600;color:var(--violet);background:var(--violet-bg);padding:1px 7px;border-radius:999px}
 </style>
 </head>
 <body>
 <header>
-  <h1>Factory console</h1><span class="repo" id="repo"></span>
+  <h1><a class="crumb" href="#" style="color:inherit">Factory console</a></h1><span class="repo" id="repo"></span>
   <span id="policy"></span>
   <span class="spacer"></span>
+  <span id="projectControls" style="display:contents">
   <span id="workerChip"></span>
   <button id="intakeBtn" title="Pull new work items from the ready folder and other sources">Pull work items</button>
   <button id="workerBtn" class="primary">Run queue</button>
-  <button id="pauseBtn" title="Kill switch: stop all agent work">Pause all</button>
+  <button id="pauseBtn" title="Kill switch: stop all agent work in this project">Pause</button>
+  </span>
 </header>
+
+<div id="homeView" style="display:none">
+  <section class="tiles" id="homeTiles"></section>
+  <div class="home-main">
+    <div class="panel"><h2>Inbox: everything waiting on you <span class="n" id="nInbox"></span></h2><div class="list" id="inbox"></div></div>
+    <div><div class="panel" style="border:none;background:none"><h2 style="border:none;padding-left:0">Projects</h2></div><div class="cards" id="cards" style="padding:0"></div></div>
+  </div>
+</div>
+<div id="projectView">
 
 <section class="tiles" id="tiles"></section>
 
@@ -107,11 +130,13 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
     <div class="panel"><h2>Live log</h2><div id="log"></div></div>
   </div>
 </main>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
 const TOKEN = document.querySelector('meta[name=asf-token]').content;
-let S = null, selected = null, tab = 'overview', D = null, busy = false;
+let S = null, selected = null, tab = 'overview', D = null, busy = false, P = null, H = null;
+const pa = path => `/api/p/${P}${path}`;
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = v => v == null ? '–' : '$' + Number(v).toFixed(2);
@@ -143,7 +168,7 @@ function toast(msg, bad) {
   t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 4500);
 }
 async function post(path, body, label) {
-  try { const r = await api(path, body || {}); toast(r.message || (label + ': ok')); await refresh(); if (selected) await loadDetail(selected); }
+  try { const r = await api(path, body || {}); toast(r.message || (label + ': ok')); await tick(); if (selected) await loadDetail(selected); }
   catch (e) { toast(label + ': ' + e.message, true); }
 }
 
@@ -170,7 +195,7 @@ function jobRow(j) {
 }
 
 function render() {
-  $('repo').textContent = S.repo + ' @ ' + S.default_branch;
+  $('repo').innerHTML = `<a class="crumb" href="#">All projects</a> / ${esc(S.repo)} @ ${esc(S.default_branch)}`;
   $('policy').innerHTML = S.shadow ? '<span class="chip">shadow mode: you merge everything</span>'
     : `<span class="chip ok">auto-merge up to tier ${esc(S.max_merge_tier)}</span>`;
   const w = S.worker;
@@ -198,12 +223,12 @@ function render() {
 }
 
 async function refresh() {
-  try { S = await api('/api/state'); render(); } catch (e) { $('workerChip').innerHTML = `<span class="chip bad">console offline: ${esc(e.message)}</span>`; }
+  try { S = await api(pa('/state')); render(); } catch (e) { $('workerChip').innerHTML = `<span class="chip bad">console offline: ${esc(e.message)}</span>`; }
 }
 
-async function select(id) { selected = id; tab = 'overview'; render(); await loadDetail(id); }
+async function select(id) { selected = id; tab = 'overview'; history.replaceState(null, '', `#p/${P}/${id}`); render(); await loadDetail(id); }
 async function loadDetail(id) {
-  try { D = await api('/api/jobs/' + id); renderDetail(); } catch (e) { toast(e.message, true); }
+  try { D = await api(pa('/jobs/' + id)); renderDetail(); } catch (e) { toast(e.message, true); }
 }
 
 const ACTION = {
@@ -222,7 +247,7 @@ async function doAction(a) {
   if (a === 'rerun' && !confirm('Cancel this job and start the work item over from the current default branch?')) return;
   if (a === 'revise') { const n = $('reviseNotes') && $('reviseNotes').value.trim(); if (!n) { tab = 'revise'; renderDetail(); return; } body.notes = n; }
   if (a === 'merge' && !confirm('Merge this branch into ' + S.default_branch + ' now?')) return;
-  await post(`/api/jobs/${D.id}/${a}`, body, a);
+  await post(pa(`/jobs/${D.id}/${a}`), body, a);
 }
 
 function renderDiff(patch) {
@@ -285,13 +310,61 @@ function renderDetail() {
     <div class="body">${body}</div>`;
 }
 
-async function queueItem(id) { await post(`/api/backlog/${id}/queue`, {}, 'queue ' + id); }
-$('workerBtn').onclick = () => S.worker.running ? post('/api/worker/stop', {}, 'stop') : post('/api/worker/start', {}, 'run queue');
-$('pauseBtn').onclick = () => S.paused ? post('/api/resume-all', {}, 'resume all') : post('/api/pause-all', {reason: 'paused from the console'}, 'pause all');
-$('intakeBtn').onclick = () => post('/api/intake', {}, 'pull work items');
+async function queueItem(id) { await post(pa(`/backlog/${id}/queue`), {}, 'queue ' + id); }
+$('workerBtn').onclick = () => S.worker.running ? post(pa('/worker/stop'), {}, 'stop') : post(pa('/worker/start'), {}, 'run queue');
+$('pauseBtn').onclick = () => S.paused ? post(pa('/resume-all'), {}, 'resume') : post(pa('/pause-all'), {reason: 'paused from the console'}, 'pause');
+$('intakeBtn').onclick = () => post(pa('/intake'), {}, 'pull work items');
 
-refresh();
-setInterval(async () => { await refresh(); if (selected && tab !== 'revise' && !busy) loadDetail(selected); }, 4000);
+// ---- portfolio (home) --------------------------------------------------------------------
+const age = s => s < 3600 ? Math.round(s/60) + ' min' : s < 172800 ? Math.round(s/3600) + ' h' : Math.round(s/86400) + ' d';
+function renderHome() {
+  const t = H.totals;
+  $('repo').textContent = `${H.projects.length} project${H.projects.length === 1 ? '' : 's'}`;
+  $('policy').innerHTML = '';
+  $('homeTiles').innerHTML = [['Waiting on you', t.needs_you, 'across all projects'], ['In progress', t.in_progress, 'agent work under way'],
+    ['Shipped this week', t.shipped_7d, `${t.shipped} shipped in total`], ['Spend', money(t.spend), 'all projects, list price']]
+    .map(([k,v,s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join('');
+  $('nInbox').textContent = H.inbox.length;
+  $('inbox').innerHTML = H.inbox.map(i => `<div class="row" onclick="location.hash='#p/${i.project}/${i.id}'">
+      <div class="t">${esc(name(i.item, i.title))}</div><div>${chip(i.state)}</div>
+      <div class="m"><span class="tag">${esc(i.project_name)}</span> ${i.owner_review ? '<span class="chip violet">owner review</span> ' : ''}waiting ${age(Date.now()/1000 - i.waiting_since)}${i.reason ? ' · ' + esc(i.reason) : ''}</div></div>`).join('')
+    || '<div class="empty">Inbox zero: nothing in any project is waiting on you.</div>';
+  $('cards').innerHTML = H.projects.map(p => {
+    if (p.error) return `<div class="card"><h3>${esc(p.name)}</h3><div class="callout bad">${esc(p.error)}</div><div class="hint">${esc(p.repo)}</div></div>`;
+    const status = p.paused ? `<span class="chip bad">paused</span>` : p.worker || p.running ? `<span class="chip info"><span class="dot pulse"></span>working</span>` : `<span class="chip">idle</span>`;
+    return `<div class="card ${p.archived ? 'archived' : ''}" onclick="location.hash='#p/${p.key}'">
+      <h3>${esc(p.name)} ${status}${p.archived ? '<span class="chip">archived</span>' : ''}</h3>
+      <div class="hint">${esc(p.repo)} · ${p.shadow ? 'shadow mode' : 'auto-merge ≤ tier ' + esc(p.max_merge_tier)} · last activity ${p.last_activity ? ago(p.last_activity) : '–'}</div>
+      <div class="grid">
+        <div><b style="color:${p.needs_you ? 'var(--bad)' : 'inherit'}">${p.needs_you}</b><span>need you${p.needs_you ? ' · oldest ' + age(p.oldest_wait_s) : ''}</span></div>
+        <div><b>${p.in_progress}</b><span>in progress</span></div>
+        <div><b>${p.shipped_7d}</b><span>shipped this week</span></div>
+        <div><b>${p.shipped}</b><span>shipped total</span></div>
+        <div><b>${money(p.cost_per_shipped)}</b><span>per shipped job</span></div>
+        <div><b>${Math.round((p.waste_share||0)*100)}%</b><span>waste</span></div>
+      </div></div>`; }).join('') || '<div class="empty">No projects yet. Run <code>asf --repo PATH init</code> in a repository.</div>';
+}
+
+// ---- routing -----------------------------------------------------------------------------
+function route() {
+  const m = location.hash.match(/^#p\/([^/]+)(?:\/(.+))?/);
+  const home = !m;
+  $('homeView').style.display = home ? '' : 'none';
+  $('projectView').style.display = home ? 'none' : '';
+  $('projectControls').style.display = home ? 'none' : 'contents';
+  if (home) { P = null; selected = null; D = null; return tick(); }
+  if (P !== m[1]) { P = m[1]; S = null; selected = null; D = null; $('detail').innerHTML = '<div class="empty" style="padding:30px">Select a job to see why it is where it is, what it changed, and what you can do.</div>'; }
+  if (m[2] && m[2] !== selected) { selected = m[2]; tab = 'overview'; loadDetail(selected); }
+  tick();
+}
+async function tick() {
+  if (!P) { try { H = await api('/api/portfolio'); renderHome(); } catch (e) { toast(e.message, true); } return; }
+  await refresh();
+  if (S) $('repo').innerHTML = `<a class="crumb" href="#">All projects</a> / ${esc(S.repo)} @ ${esc(S.default_branch)}`;
+}
+window.addEventListener('hashchange', route);
+route();
+setInterval(async () => { await tick(); if (P && selected && tab !== 'revise' && !busy) loadDetail(selected); }, 4000);
 </script>
 </body>
 </html>

@@ -341,7 +341,113 @@ def _summarize(e: Any) -> str:
     return json.dumps(p)[:300]
 
 
-def make_handler(console: Console):
+class Portfolio:
+    """All projects under $ASF_HOME: one Console per project, created on first use."""
+
+    def __init__(self, secrets: Any = None):
+        self.secrets = secrets
+        self.consoles: dict[str, Console] = {}
+        self.errors: dict[str, str] = {}
+        self.lock = threading.Lock()
+        self.token = pysecrets.token_urlsafe(24)
+        self.stop_all = threading.Event()
+
+    def projects(self) -> list[Any]:
+        from .projects import discover
+        return [p for p in discover() if not p.hidden]
+
+    def console(self, key: str) -> Console:
+        with self.lock:
+            if key in self.consoles:
+                return self.consoles[key]
+        proj = next((p for p in self.projects() if p.key == key), None)
+        if proj is None:
+            raise KeyError(key)
+        if not proj.available:
+            raise ValueError(f"repo for {key} not found; set it in ~/.asf/projects.yaml")
+        from . import config as config_mod
+        from .store import Store
+        cfg = config_mod.resolve(proj.repo, None, proj.state_dir)
+        f = Factory(proj.repo, cfg, proj.state_dir, Store(proj.state_dir / "factory.db"),
+                    secrets=self.secrets or (lambda n: None), echo=lambda m: None)
+        c = Console(f)
+        c.token = self.token
+        c.project = proj
+        migrated = f.migrate_legacy()
+        if migrated:
+            c._echo(f"migrated {migrated} job(s) saved when 'done' meant delivered")
+        with self.lock:
+            self.consoles[key] = c
+        return c
+
+    def summary(self) -> dict[str, Any]:
+        now = time.time()
+        cards, inbox = [], []
+        for p in self.projects():
+            card: dict[str, Any] = {"key": p.key, "name": p.name, "repo": str(p.repo or ""), "priority": p.priority,
+                                    "archived": p.archived, "available": p.available}
+            try:
+                c = self.console(p.key)
+            except Exception as e:  # noqa: BLE001
+                card["error"] = str(e)
+                cards.append(card)
+                continue
+            st = c.f.store
+            jobs = st.jobs()
+            m = metrics.compute(st)
+            titles = c._titles()
+            waiting = [j for j in jobs if j["state"] in NEEDS_YOU]
+            for j in waiting:
+                ext = titles.get(j["work_item_id"], ("?", ""))
+                since = j["data"].get("delivered_at") if j["state"] == "awaiting_review" else j["updated"]
+                inbox.append({"project": p.key, "project_name": p.name, "id": j["id"], "item": ext[0], "title": ext[1],
+                              "state": j["state"], "reason": current_reason(j["state"], j["data"]),
+                              "owner_review": bool(j["data"].get("owner_review")), "waiting_since": since or j["updated"],
+                              "cost": m["per_job"].get(j["id"], {}).get("cost_usd", 0)})
+            last = max([j["updated"] for j in jobs] or [0])
+            card.update({
+                "needs_you": len(waiting),
+                "oldest_wait_s": max([now - (j["data"].get("delivered_at") or j["updated"]) for j in waiting] or [0]),
+                "in_progress": m["counts"]["in_progress"] + m["counts"]["verifying"],
+                "running": c.current or next((j["id"] for j in jobs if j["id"] in c.busy), None),
+                "worker": c.worker_running(),
+                "shipped": m["counts"]["shipped"],
+                "shipped_7d": sum(1 for j in jobs if j["state"] == "done" and (j["data"].get("done_at") or 0) > now - 7 * 86400),
+                "cost_per_shipped": m["cost_per_shipped_usd"], "waste_share": m["waste_share"],
+                "spend": m["spend_usd"]["total"], "paused": c.f.paused() or "", "last_activity": last,
+                "shadow": bool(c.f.cfg.get("autonomy.shadow")), "max_merge_tier": c.f.cfg.get("autonomy.max_merge_tier"),
+            })
+            cards.append(card)
+        inbox.sort(key=lambda x: x["waiting_since"])
+        totals = {k: sum(c.get(k) or 0 for c in cards) for k in ("needs_you", "in_progress", "shipped", "shipped_7d", "spend")}
+        return {"projects": cards, "inbox": inbox, "totals": totals}
+
+    def start_reconciler(self, interval: float = 20.0) -> None:
+        def loop() -> None:
+            while not self.stop_all.is_set():
+                for p in self.projects():
+                    if p.archived or not p.available:
+                        continue
+                    try:
+                        c = self.console(p.key)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    for job in c.f.store.jobs(["awaiting_review", "merged", "observing"]):
+                        try:
+                            if job["state"] == "awaiting_review" and not c.f._review_settled(job):
+                                continue
+                            c._echo(f"reconcile: {job['id']} merged; verifying")
+                            c.run_guarded(job["id"])
+                        except Exception as e:  # noqa: BLE001
+                            c._echo(f"reconcile {job['id']}: {e}")
+                self.stop_all.wait(interval)
+        threading.Thread(target=loop, daemon=True).start()
+
+
+NEEDS_YOU = {"awaiting_review", "awaiting_approval", "needs_human", "failed", "paused"}
+
+
+def make_handler(portfolio: Portfolio):
     page = (files("asf") / "ui_static" / "index.html").read_text()
 
     class Handler(BaseHTTPRequestHandler):
@@ -359,15 +465,18 @@ def make_handler(console: Console):
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?")[0]
+            parts = path.strip("/").split("/")
             try:
                 if path == "/":
-                    return self._send(200, page.replace("__ASF_TOKEN__", console.token), "text/html; charset=utf-8")
-                if path == "/api/state":
-                    return self._send(200, console.state())
-                if path.startswith("/api/jobs/"):
-                    return self._send(200, console.job_detail(path.split("/")[3]))
-                if path == "/api/metrics":
-                    return self._send(200, metrics.compute(console.f.store))
+                    return self._send(200, page.replace("__ASF_TOKEN__", portfolio.token), "text/html; charset=utf-8")
+                if path == "/api/portfolio":
+                    return self._send(200, portfolio.summary())
+                if len(parts) >= 4 and parts[:2] == ["api", "p"]:
+                    c = portfolio.console(parts[2])
+                    if parts[3] == "state":
+                        return self._send(200, c.state())
+                    if parts[3] == "jobs" and len(parts) == 5:
+                        return self._send(200, c.job_detail(parts[4]))
             except KeyError as e:
                 return self._send(404, {"error": f"not found: {e}"})
             except Exception as e:  # noqa: BLE001
@@ -375,29 +484,37 @@ def make_handler(console: Console):
             self._send(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.headers.get("X-ASF-Token") != console.token:
+            if self.headers.get("X-ASF-Token") != portfolio.token:
                 return self._send(403, {"error": "missing or wrong token"})
             body = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0))
             payload = json.loads(body or b"{}")
             parts = self.path.strip("/").split("/")
             try:
-                if parts == ["api", "worker", "start"]:
-                    return self._send(200, {"message": console.start_worker()})
-                if parts == ["api", "worker", "stop"]:
-                    console.stop.set()
+                if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "settings":
+                    from .projects import set_entry
+                    allowed = {k: payload[k] for k in ("name", "priority", "archived", "hidden") if k in payload}
+                    set_entry(parts[2], **allowed)
+                    return self._send(200, {"message": "saved"})
+                if len(parts) < 4 or parts[:2] != ["api", "p"]:
+                    return self._send(404, {"error": "not found"})
+                c, rest = portfolio.console(parts[2]), parts[3:]
+                if rest == ["worker", "start"]:
+                    return self._send(200, {"message": c.start_worker()})
+                if rest == ["worker", "stop"]:
+                    c.stop.set()
                     return self._send(200, {"message": "stopping after the current step"})
-                if parts == ["api", "intake"]:
-                    return self._send(200, {"message": f"{len(console.f.poll())} new job(s)"})
-                if parts == ["api", "pause-all"]:
-                    console.f.store.set_flag("paused_all", payload.get("reason") or "paused from the UI")
+                if rest == ["intake"]:
+                    return self._send(200, {"message": f"{len(c.f.poll())} new job(s)"})
+                if rest == ["pause-all"]:
+                    c.f.store.set_flag("paused_all", payload.get("reason") or "paused from the console")
                     return self._send(200, {"message": "paused"})
-                if parts == ["api", "resume-all"]:
-                    console.f.store.set_flag("paused_all", None)
+                if rest == ["resume-all"]:
+                    c.f.store.set_flag("paused_all", None)
                     return self._send(200, {"message": "resumed"})
-                if len(parts) == 4 and parts[:2] == ["api", "backlog"] and parts[3] == "queue":
-                    return self._send(200, {"message": console.queue_item(parts[2])})
-                if len(parts) == 4 and parts[:2] == ["api", "jobs"]:
-                    return self._send(200, {"message": console.act(parts[2], parts[3], payload)})
+                if len(rest) == 3 and rest[0] == "backlog" and rest[2] == "queue":
+                    return self._send(200, {"message": c.queue_item(rest[1])})
+                if len(rest) == 3 and rest[0] == "jobs":
+                    return self._send(200, {"message": c.act(rest[1], rest[2], payload)})
             except (ValueError, RuntimeError, KeyError) as e:
                 return self._send(400, {"error": str(e)})
             except Exception as e:  # noqa: BLE001
@@ -407,15 +524,12 @@ def make_handler(console: Console):
     return Handler
 
 
-def serve(factory: Factory, port: int, open_browser: bool = False) -> None:
-    console = Console(factory)
-    migrated = factory.migrate_legacy()
-    if migrated:
-        console._echo(f"migrated {migrated} job(s) saved when 'done' meant delivered")
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
-    console.start_reconciler()
-    url = f"http://127.0.0.1:{port}/"
-    print(f"factory console: {url}  (Ctrl-C to stop)", flush=True)
+def serve(port: int, open_project: str | None = None, open_browser: bool = False, secrets: Any = None) -> None:
+    portfolio = Portfolio(secrets)
+    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(portfolio))
+    portfolio.start_reconciler()
+    url = f"http://127.0.0.1:{port}/" + (f"#p/{open_project}" if open_project else "")
+    print(f"factory console: {url}  (all projects under ~/.asf; Ctrl-C to stop)", flush=True)
     if open_browser:
         import webbrowser
         webbrowser.open(url)
@@ -424,5 +538,7 @@ def serve(factory: Factory, port: int, open_browser: bool = False) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        console.stop.set()
-        console.stop_all.set()
+        portfolio.stop_all.set()
+        for c in portfolio.consoles.values():
+            c.stop.set()
+            c.stop_all.set()

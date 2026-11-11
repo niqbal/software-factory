@@ -9,12 +9,20 @@ from http.server import ThreadingHTTPServer
 
 from test_pipeline import factory, item, provider
 
-from asf.ui import Console, make_handler
+from asf.projects import Project
+from asf.ui import Console, Portfolio, make_handler
+
+KEY = "invoice-abc123"
 
 
 def start(f):
+    portfolio = Portfolio()
     console = Console(f)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(console))
+    console.token = portfolio.token
+    console.project = Project(key=KEY, state_dir=f.state_dir, repo=f.repo, name="invoice")
+    portfolio.consoles[KEY] = console
+    portfolio.projects = lambda: [console.project]
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(portfolio))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return console, server, f"http://127.0.0.1:{server.server_address[1]}"
 
@@ -37,22 +45,25 @@ def test_console_views_and_merge(invoice_repo, state, store):
     try:
         page = urllib.request.urlopen(base + "/").read().decode()
         assert console.token in page and "Factory console" in page
-        st = get(base + "/api/state")
+        st = get(f"{base}/api/p/{KEY}/state")
         assert [j["state"] for j in st["jobs"]] == ["awaiting_review"]
-        detail = get(f"{base}/api/jobs/{job_id}")
+        pf = get(base + "/api/portfolio")
+        assert pf["projects"][0]["needs_you"] == 1 and [i["id"] for i in pf["inbox"]] == [job_id]
+        assert pf["inbox"][0]["project"] == KEY
+        detail = get(f"{base}/api/p/{KEY}/jobs/{job_id}")
         assert "merge" in detail["actions"] and "invoice/totals.py" in detail["diff"]["stat"]
         try:
-            post(f"{base}/api/jobs/{job_id}/merge")  # no token: refused
+            post(f"{base}/api/p/{KEY}/jobs/{job_id}/merge")  # no token: refused
             raise AssertionError("POST without token was accepted")
         except urllib.error.HTTPError as e:
             assert e.code == 403
-        assert "merging" in post(f"{base}/api/jobs/{job_id}/merge", console.token)["message"]
+        assert "merging" in post(f"{base}/api/p/{KEY}/jobs/{job_id}/merge", console.token)["message"]
         for _ in range(100):
             if store.job(job_id)["state"] == "done":
                 break
             time.sleep(0.1)
         assert store.job(job_id)["state"] == "done"
-        assert get(base + "/api/state")["metrics"]["counts"]["shipped"] == 1
+        assert get(f"{base}/api/p/{KEY}/state")["metrics"]["counts"]["shipped"] == 1
     finally:
         server.shutdown()
 
@@ -69,9 +80,27 @@ def test_backlog_dependencies(invoice_repo, state, store, tmp_path):
                    "intake.local.path": "factory/ready"})
     console, server, base = start(f)
     try:
-        bl = {b["id"]: b for b in get(base + "/api/state")["backlog"]}
+        bl = {b["id"]: b for b in get(f"{base}/api/p/{KEY}/state")["backlog"]}
         assert bl["WI-002"]["ready"] and not bl["WI-003"]["ready"] and bl["WI-003"]["blocked_by"] == ["WI-002"]
-        msg = post(f"{base}/api/backlog/WI-002/queue", console.token)["message"]
+        msg = post(f"{base}/api/p/{KEY}/backlog/WI-002/queue", console.token)["message"]
         assert "queued WI-002" in msg and (invoice_repo / "factory" / "ready" / "WI-002.md").exists()
     finally:
         server.shutdown()
+
+
+def test_discovery_and_registry(tmp_path, monkeypatch):
+    from asf import projects
+    from asf.util import sha
+    home = tmp_path / "asf"
+    repo = tmp_path / "work" / "demo"
+    repo.mkdir(parents=True)
+    key = f"demo-{sha(str(repo.resolve()), 6)}"
+    (home / key).mkdir(parents=True)
+    (home / key / "factory.db").write_text("")
+    monkeypatch.setenv("ASF_HOME", str(home))
+    monkeypatch.setattr(projects, "SEARCH_ROOTS", [str(tmp_path / "work")])
+    [p] = projects.discover()
+    assert p.repo == repo.resolve() and (home / key / "project.json").exists()  # recovered, then recorded
+    projects.set_entry(key, name="Demo", priority=1, archived=True)
+    [p] = projects.discover()
+    assert (p.name, p.priority, p.archived) == ("Demo", 1, True)

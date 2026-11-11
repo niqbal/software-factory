@@ -42,16 +42,32 @@ runs the whole factory inside GitHub Actions when an issue gets the `factory` la
 ## The console
 
 ```bash
-asf --repo ~/code/myapp ui --open      # http://127.0.0.1:8787
+asf ui --open            # every project under ~/.asf, at http://127.0.0.1:8787
 ```
 
-A local web page (bound to 127.0.0.1, with a per-process token on every action) that shows what
-needs you, what agents are doing, the backlog with dependencies resolved, and the factory's
-metrics. Each job has its reason for stopping, the owner-review lines, reviewer findings, the
-diff, the report and a timeline of agent tool calls. Every owner action is a button: run the
-queue, merge, send back with notes, reject, resume, retry, start over, queue a backlog item,
-pause everything. A background reconciler notices merges made outside the factory and
-verifies them.
+One local page for every project the factory works on (bound to 127.0.0.1, with a per-process
+token on every action).
+
+- **Home:** one combined inbox of everything waiting on you across projects, oldest first,
+  and a card per project. Each card shows what needs you and how long the oldest has waited,
+  agent work in progress, shipped this week, cost per shipped job, waste, policy and last
+  activity.
+- **Project view** (`#p/<project>`): needs you, working, backlog with `depends_on` resolved,
+  history, and per job the reason, owner-review lines, findings, diff, report and timeline.
+  Every owner action is a button: run the queue, merge, send back with notes, reject, resume,
+  retry, start over, queue a backlog item, pause.
+- A reconciler notices merges made outside the factory, in any project, and verifies them.
+
+Projects are found automatically: every state directory under `$ASF_HOME` (default `~/.asf`)
+with a `factory.db`. The repo path is recorded in `project.json` whenever asf opens a project,
+or recovered for older state. `~/.asf/projects.yaml` is optional and lets you name, order,
+prioritise, hide or archive projects:
+
+```yaml
+projects:
+  workflow-engine-11bf9a: {name: Workflow engine, priority: 1}
+  CycleSense-98c570: {archived: true}
+```
 
 ## Job states: delivered is not done
 
@@ -82,7 +98,7 @@ writing the change.
 | `add --title ... [--accept ...]` | Queues a work item by hand. |
 | `run [--job ID] [--all] [--stop-at STATE]` | Drives jobs through the state machine. Resumable after a crash. |
 | `status [JOB]`, `events JOB [--jsonl]`, `report [--json]` | Job list, full audit trail of every agent tool call, metrics that count only shipped work. |
-| `ui [--port N] [--open]` | The local web console (see above). |
+| `ui [--port N] [--open]` | The local web console for all projects (see above); with `--repo`, it opens that project. |
 | `approve` / `reject JOB` | Human approval for tiers that require it. |
 | `resume JOB [--extra-usd N]`, `retry JOB` | Continue a budget-paused job, or re-enter a failed one from a clean sandbox. |
 | `revise JOB --note "..." [--notes-file F] [--extra-usd N]` | Send a delivered, unmerged job back with review notes. The implementer works on top of the delivered commit on the same branch, then the tester, gates and reviewers run again over the whole change, and one new commit is added. Each revision gets a fresh budget. Follow with `run --job JOB`. |
