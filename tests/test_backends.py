@@ -65,9 +65,9 @@ def test_cursor_turns_are_read_only_sandboxed_and_resumed(fake_cursor):
     assert conv.step().tool_calls[0].name == "finish"
     first, second = calls()
     for a in (first["args"], second["args"]):
-        assert a[a.index("--mode") + 1] == "ask" and a[a.index("--sandbox") + 1] == "enabled"
+        assert "--mode" not in a and a[a.index("--sandbox") + 1] == "enabled" and "--force" not in a
     assert "--resume" not in first["args"] and second["args"][second["args"].index("--resume") + 1] == "C1"
-    assert "SYSTEM RULES" in first["args"][-1] and "only see an empty scratch folder" in first["args"][-1]
+    assert "SYSTEM RULES" in first["args"][-1] and "are disabled" in first["args"][-1] and "fully permitted" in first["args"][-1]
     assert "package main" in second["args"][-1] and "SYSTEM RULES" not in second["args"][-1]
     assert first["cwd"] != second["cwd"] or True  # one scratch dir per conversation
 

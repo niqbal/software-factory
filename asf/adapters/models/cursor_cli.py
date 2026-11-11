@@ -4,9 +4,11 @@ Cursor's headless mode always has its own tools (read, search, shell, write), wi
 turn them off and no structured-output mode. The broker must stay the only way an agent touches
 the repository, so every call runs:
 
-  --mode ask           read-only mode: no edits, no shell
-  --sandbox enabled    OS sandbox on top
-  cwd = an empty scratch folder, so its own read tools find nothing
+  --sandbox enabled    OS sandbox
+  cwd = an empty scratch folder whose .cursor/cli.json denies Read, Write, Shell and MCP, so
+        Cursor's own tools fail and have nothing to touch
+(Read-only `--mode ask` was tried and dropped: the model then refused to request the host's
+write tools as well, believing all edits were forbidden.)
 
 The model is told its built-in tools see only that empty folder, and it requests real work as
 JSON tool calls that asf runs through the broker, exactly as with the Claude Code provider.
@@ -33,8 +35,11 @@ from ..base import AdapterContext, Conversation, ModelProvider, ModelTurn, ToolC
 
 PREAMBLE = """You are an agent controlled by a host program (a software factory).
 
-IMPORTANT: your built-in tools (file read, search, shell, edit) only see an empty scratch folder.
-Do not use them. The real project is reachable ONLY through the host tools listed below.
+IMPORTANT: your built-in tools (file read, search, shell, edit) are disabled and only see an
+empty scratch folder. Do not use them. The real project is reachable ONLY through the host
+tools listed below, and those are fully permitted: when the task needs code changed, tests
+written or commands run, request the host's write/edit/run tools. Any read-only setting of
+your own client does not apply to host tools.
 
 To use a host tool, put it in "tool_calls" in your reply; the host runs the calls in order and
 sends the results in the next message as <tool_result id=... error=true|false> blocks.
@@ -184,7 +189,7 @@ class CursorProvider(ModelProvider):
     def call(self, prompt: str, model: str, resume: str | None = None, cwd: str | None = None) -> dict[str, Any]:
         if not self.binary:
             raise CursorError(self.credentials_problem() or "no binary")
-        args = [self.binary, "-p", "--output-format", "json", "--mode", "ask", "--sandbox", "enabled", "--trust"]
+        args = [self.binary, "-p", "--output-format", "json", "--sandbox", "enabled", "--trust"]
         if model and model != "auto":
             args += ["--model", model]
         if resume:

@@ -69,6 +69,38 @@ projects:
   CycleSense-98c570: {archived: true}
 ```
 
+## Model backends: Claude Code, Cursor, or both
+
+Agents reach models through the CLIs you are already signed in to, so work runs on your
+subscriptions rather than API keys:
+
+| `models.provider` | What runs each agent turn |
+|---|---|
+| `claude_code` | `claude -p` with its own tools switched off (`--tools ""`) and structured output |
+| `cursor_cli` | `cursor-agent -p --mode ask --sandbox enabled` in a scratch folder whose `.cursor/cli.json` denies all of Cursor's own tools |
+| `pool` | Several backends with a per-role preference order and failover |
+| `anthropic` | The Anthropic API (needs a key) |
+
+In every case the model only *requests* tool calls (as structured output or JSON), and asf's
+broker executes them, so permissions, protected paths and test integrity hold no matter which
+model is working. A pool:
+
+```yaml
+models:
+  provider: pool
+  backends:
+    cursor: {provider: cursor_cli, default: {model: gpt-5.3-codex}, roles: {implementer: {model: gpt-5.3-codex-high}}}
+    claude: {provider: claude_code, default: {model: claude-opus-5-5}, roles: {reviewer: {model: claude-opus-5-5, effort: high}}}
+  routing:
+    default: [cursor, claude]     # first usable backend wins
+    reviewer: [claude, cursor]    # a different model family reviews the work
+```
+
+Usage limits are tracked per backend (`~/.asf/limits.json`, shared by all projects). A
+Claude limit no longer stops a pooled project: the interrupted job retries on Cursor, and the
+reverse. `asf doctor` checks every backend and prints the routing, and the console shows each
+backend's status and which backend ran each role of a job.
+
 ## The scheduler: one queue for every project
 
 All projects share one model subscription, so one scheduler runs their jobs. Start and stop it,
