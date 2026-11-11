@@ -438,7 +438,7 @@ class Factory:
                               acceptance=acceptance, manual_verification=triage.get("manual_verification", []))
         if not triage.get("automatable", True):
             self._needs_human(self.store.job(job["id"]), f"not automatable: {triage.get('reason_if_not')}")
-        elif triage.get("clarification_needed"):
+        elif _real_question(triage.get("clarification_needed")):
             self._needs_human(self.store.job(job["id"]), f"clarification needed: {triage['clarification_needed']}")
 
     def _s_triaged(self, job: dict[str, Any]) -> None:
@@ -633,3 +633,11 @@ class Factory:
                 self._sandbox(job).destroy()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _real_question(q: Any) -> bool:
+    """Models sometimes fill an optional field with a placeholder such as '""', 'none' or 'N/A'."""
+    if not isinstance(q, str):
+        return bool(q)
+    t = q.strip().strip('"\'` ').lower()
+    return t not in ("", "none", "null", "n/a", "na", "no", "-")

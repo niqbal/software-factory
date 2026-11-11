@@ -61,3 +61,10 @@ def test_manual_verification_blocks_agent_merge():
     live = load_cfg(invoice_config(**{"autonomy.shadow": False, "autonomy.max_merge_tier": 3}))
     d = policy.decide(live, 1, manual_checks=["check on a real iPhone"])
     assert not d.may_agent_merge and "manual verification" in d.reason
+
+
+def test_placeholder_clarifications_are_not_questions():
+    from asf.orchestrator import _real_question
+    for q in ['""', "", "  ", "None", "N/A", "''", None]:
+        assert not _real_question(q), q
+    assert _real_question("Which fault-hook API should memstore expose?")
