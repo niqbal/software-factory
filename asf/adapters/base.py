@@ -269,6 +269,7 @@ BUILTIN: dict[str, dict[str, str]] = {
     "models": {
         "anthropic": "asf.adapters.models.anthropic_provider:AnthropicProvider",
         "scripted": "asf.adapters.models.scripted:ScriptedProvider",
+        "claude_code": "asf.adapters.models.claude_code:ClaudeCodeProvider",
     },
 }
 

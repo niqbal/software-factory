@@ -149,9 +149,14 @@ def cmd_doctor(app: App) -> int:
             check(True, f"{cat} adapter {cfg.get(key)}", "")
         except KeyError as e:
             check(False, "", str(e))
-    key_env = cfg.get("models.api_key_env", "ANTHROPIC_API_KEY")
-    check(bool(app.secret(key_env)), f"{key_env} available (value not shown)",
-          f"{key_env} not set; pass --env-file or export it", fatal=cfg.get("models.provider") == "anthropic")
+    if cfg.get("models.provider") == "anthropic":
+        key_env = cfg.get("models.api_key_env", "ANTHROPIC_API_KEY")
+        check(bool(app.secret(key_env)), f"{key_env} available (value not shown)",
+              f"{key_env} not set; pass --env-file or export it", fatal=True)
+    elif cfg.get("models.provider") == "claude_code":
+        from .adapters.models.claude_code import find_binary
+        b = find_binary(cfg.get("models") or {})
+        check(bool(b), f"Claude Code CLI at {b}", "Claude Code CLI not found: set models.binary or ASF_CLAUDE_BIN")
     print(f"  info  shadow mode {'on' if cfg.get('autonomy.shadow') else 'off'}, max merge tier "
           f"{cfg.get('autonomy.max_merge_tier')}, monthly cap ${cfg.get('budgets.monthly_cap_usd')}")
     print("healthy" if ok else "problems found")
