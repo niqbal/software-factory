@@ -177,3 +177,18 @@ def test_ci_workflow_is_valid_yaml():
     steps = wf["jobs"]["factory"]["steps"]
     assert any("asf --repo ." in (s.get("run") or "") for s in steps)
     assert wf["permissions"]["contents"] == "write"
+
+
+def test_github_intake_falls_back_to_gh_sign_in_when_env_token_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "stale")
+    envs = []
+
+    def fake(cmd, cwd=None, shell=None, timeout=None, env=None):
+        envs.append(env)
+        if env is None:
+            return ExecResult(1, "", "HTTP 401: Bad credentials", 0.1)
+        assert "GITHUB_TOKEN" not in env
+        return ExecResult(0, json.dumps([{"number": 1, "title": "Noor is stuck", "labels": [{"name": "factory"}]}]), "", 0.1)
+
+    [item] = GitHubIssuesIntake({"label": "factory"}, ctx(tmp_path, runner=fake)).poll()
+    assert item.external_id == "1" and len(envs) == 2

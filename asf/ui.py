@@ -368,10 +368,24 @@ class Portfolio:
         from .projects import discover
         return [p for p in discover() if not p.hidden]
 
+    @staticmethod
+    def _config_stamp(repo: Any, state_dir: Any) -> float:
+        """mtime of the factory.yaml a project resolves to (the repo copy wins over the pending one)."""
+        for cand in (Path(repo) / "factory.yaml", Path(state_dir) / "factory.yaml"):
+            if cand.exists():
+                return cand.stat().st_mtime
+        return 0.0
+
     def console(self, key: str) -> Console:
         with self.lock:
-            if key in self.consoles:
-                return self.consoles[key]
+            c = self.consoles.get(key)
+            if c is not None:
+                # Pick up an edited factory.yaml, but never swap a console out from under a job.
+                stamp = getattr(c, "cfg_stamp", None)
+                stale = stamp is not None and self._config_stamp(c.f.repo, c.f.state_dir) != stamp
+                if not stale or c.busy or c.current:
+                    return c
+                del self.consoles[key]
         proj = next((p for p in self.projects() if p.key == key), None)
         if proj is None:
             raise KeyError(key)
@@ -383,6 +397,7 @@ class Portfolio:
         f = Factory(proj.repo, cfg, proj.state_dir, Store(proj.state_dir / "factory.db"),
                     secrets=self.secrets or (lambda n: None), echo=lambda m: None)
         c = Console(f)
+        c.cfg_stamp = self._config_stamp(proj.repo, proj.state_dir)
         c.token = self.token
         c.project = proj
         c.scheduler = self.scheduler

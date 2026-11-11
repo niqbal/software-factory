@@ -6,6 +6,7 @@ Trigger: an issue carrying the configured label (default "factory").
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from ...models import WorkItem
@@ -23,6 +24,17 @@ def _kind(labels: list[str]) -> str:
     return "task"
 
 
+_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN")
+
+
+def _env_token() -> bool:
+    return any(os.environ.get(v) for v in _TOKEN_VARS)
+
+
+def _without_env_token() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in _TOKEN_VARS}
+
+
 class GitHubIssuesIntake(IntakeAdapter):
     kind = "github_issues"
 
@@ -32,6 +44,11 @@ class GitHubIssuesIntake(IntakeAdapter):
 
     def _gh(self, *args: str) -> Any:
         res = (self.ctx.runner or run)(["gh", *args], cwd=self.ctx.repo, shell=False, timeout=60)
+        if not res.ok and "401" in (res.stdout + res.stderr) and _env_token():
+            # An inherited GITHUB_TOKEN/GH_TOKEN overrides gh's own sign-in; when GitHub rejects
+            # it, retry with the sign-in instead.
+            res = (self.ctx.runner or run)(["gh", *args], cwd=self.ctx.repo, shell=False, timeout=60,
+                                           env=_without_env_token())
         if not res.ok:
             raise RuntimeError(f"gh {' '.join(args[:3])} failed: {res.tail(800)}")
         return json.loads(res.stdout or "null")

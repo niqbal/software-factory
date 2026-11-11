@@ -104,3 +104,23 @@ def test_discovery_and_registry(tmp_path, monkeypatch):
     projects.set_entry(key, name="Demo", priority=1, archived=True)
     [p] = projects.discover()
     assert (p.name, p.priority, p.archived) == ("Demo", 1, True)
+
+
+def test_portfolio_reloads_an_edited_factory_yaml(tmp_path, monkeypatch):
+    import os
+    from conftest import make_repo
+    from asf import cli
+    monkeypatch.setenv("ASF_HOME", str(tmp_path / "home"))
+    repo = make_repo(tmp_path / "game", {"package.json": json.dumps({"scripts": {"test": "node --test"}})})
+    assert cli.main(["--repo", str(repo), "init", "--no-branch"]) == 0
+    (repo / "factory.yaml").write_text((next((tmp_path / "home").iterdir()) / "factory.yaml").read_text())
+    portfolio = Portfolio()
+    [p] = portfolio.projects()
+    first = portfolio.console(p.key)
+    assert portfolio.console(p.key) is first
+    first.busy.add("JOB-1")                       # a job is running: keep the console
+    os.utime(repo / "factory.yaml", (1, 1))
+    assert portfolio.console(p.key) is first
+    first.busy.clear()
+    second = portfolio.console(p.key)
+    assert second is not first and second.cfg_stamp == 1
