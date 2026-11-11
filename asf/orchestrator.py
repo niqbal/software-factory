@@ -7,6 +7,8 @@ stopped with `asf run --job <id>`.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -19,10 +21,10 @@ from .agents.roles import BudgetExceeded, PromptBuilder, run_agent, work_item_bl
 from .broker import ToolBroker
 from .config import Config
 from .gates import GateRunner
-from .models import TERMINAL, AgentResult, GateResult, WorkItem
+from .models import DELIVERED, TERMINAL, WAITING, AgentResult, GateResult, WorkItem
 from .report import render_report
 from .store import Store
-from .util import git, run, slugify
+from .util import git, run, sandbox_env, slugify
 
 TRIAGE_SCHEMA = {
     "type": "object",
@@ -142,7 +144,7 @@ class Factory:
             state = job["state"]
             if state in TERMINAL or state == "paused" or state == stop_at:
                 return state
-            if state == "awaiting_approval" and not self._approvals_settled(job):
+            if state in WAITING and not self._waiting_settled(job):
                 return state
             reason = self.paused()
             if reason:
@@ -226,8 +228,8 @@ class Factory:
     def _delivered_branch_tip(self, job: dict[str, Any], verb: str) -> str:
         """Tip of a delivered, unmerged job's branch, or ValueError saying why it can't be used."""
         d = job["data"]
-        merged = bool(d.get("merged")) or d.get("outcome") == "merged"
-        if job["state"] != "done" or merged:
+        merged = bool(d.get("merged")) or d.get("outcome") in ("merged", "shipped")
+        if job["state"] != "awaiting_review" or merged:
             raise ValueError(f"{job['id']} is {job['state']}{' and merged' if merged else ''}; "
                              f"only delivered, unmerged jobs can be {verb}")
         branch = d.get("branch")
@@ -320,11 +322,11 @@ class Factory:
             actions.append(act)
             if dry_run:
                 continue
-            if job["state"] == "done" and notes:
+            if job["state"] == "awaiting_review" and notes:
                 # Before the comments are marked as handled: a missing key must leave them pending.
                 self.require_model()
             self._mark_seen(job["id"], [c["id"] for c in fresh])
-            if job["state"] != "done":
+            if job["state"] != "awaiting_review":
                 gh.comment(number, f"The factory is still working on `{job['id']}` ({job['state']}); "
                                    "comment `/revise` again once it has finished.")
                 act["action"] = f"skip: job is {job['state']}"
@@ -345,7 +347,7 @@ class Factory:
             done = self.store.job(job["id"])
             act["result"] = final
             rev = (done["data"].get("revisions") or [{}])[-1]
-            if final == "done" and rev.get("commit"):
+            if final in ("awaiting_review", "done") and rev.get("commit"):
                 msg = (f"**Revision {rev['n']}** pushed as {rev['commit'][:10]}. Notes addressed:\n"
                        + "\n".join(f"- {n}" for n in notes)
                        + f"\n\n{(done['data'].get('implementer') or '').strip()[:1500]}")
@@ -363,7 +365,8 @@ class Factory:
     def _active_revision(self, job: dict[str, Any]) -> dict[str, Any] | None:
         """The revision in progress, if the job was sent back with `revise` and is not done yet."""
         revisions = job["data"].get("revisions") or []
-        return revisions[-1] if revisions and job["state"] != "done" and not revisions[-1].get("commit") \
+        return revisions[-1] if revisions and job["state"] not in DELIVERED | {"done"} \
+            and not revisions[-1].get("commit") \
             else None
 
     # -------------------------------------------------------------- budgets --
@@ -589,9 +592,13 @@ class Factory:
             pr = {**(job["data"].get("pr") or {}), "url": result["url"], "number": result["number"]}
             pr.setdefault("seen", [])
             self.store.update_job(job["id"], pr=pr)
+        self.store.update_job(job["id"], delivered_at=time.time())
         if not d["may_agent_merge"]:
-            self.store.update_job(job["id"], "done", outcome="delivered for human merge")
-            self._finish(job, f"delivered {result.get('url') or result.get('branch')} ({d['reason']})")
+            # Delivered is not done: the job waits for a human to merge, then verifies the merge.
+            self.store.update_job(job["id"], "awaiting_review", outcome="")
+            self._release_sandbox(job)  # frees the branch so the reviewer can check it out
+            self.notify("awaiting_review", self.store.job(job["id"]),
+                        f"{result.get('url') or result.get('branch')} is ready for review ({d['reason']})")
             return
         next_state = "awaiting_approval" if d["approvals_required"] > 0 else "merging"
         self.store.update_job(job["id"], next_state)
@@ -613,24 +620,122 @@ class Factory:
     def _s_awaiting_approval(self, job: dict[str, Any]) -> None:
         return None  # handled by _approvals_settled
 
+    def _s_awaiting_review(self, job: dict[str, Any]) -> None:
+        return None  # handled by _review_settled
+
+    def _s_awaiting_owner(self, job: dict[str, Any]) -> None:
+        return None  # handled by _owner_settled
+
+    def _owner_settled(self, job: dict[str, Any]) -> bool:
+        return False  # replaced below with proposal handling
+
+    def _waiting_settled(self, job: dict[str, Any]) -> bool:
+        """True when a waiting job's condition resolved (its state has changed)."""
+        return {"awaiting_approval": self._approvals_settled, "awaiting_review": self._review_settled,
+                "awaiting_owner": self._owner_settled}[job["state"]](job)
+
+    def _branch_status(self, branch: str | None) -> str:
+        """'merged', 'open' or 'gone' for a branch relative to the default branch."""
+        if not branch or not git(self.repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}",
+                                 check=False).strip():
+            return "gone"
+        tip = git(self.repo, "rev-parse", f"refs/heads/{branch}").strip()
+        ok = run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", tip, self.cfg.default_branch],
+                 shell=False).ok
+        return "merged" if ok else "open"
+
+    def _review_settled(self, job: dict[str, Any]) -> bool:
+        """Notice a human merge (however it was done) or an abandoned branch."""
+        status = self._branch_status(job["data"].get("branch"))
+        if status == "merged":
+            self.store.update_job(job["id"], "merged", merged_at=time.time(), merged_by="human")
+            self.store.event(job["id"], "job.merged", "human", {"branch": job["data"].get("branch")})
+            return True
+        if status == "gone":
+            self.store.update_job(job["id"], "rejected", outcome="abandoned: branch deleted without merging")
+            return True
+        return False
+
+    def merge_reviewed(self, job_id: str, by: str = "human") -> str:
+        """A human approves a delivered job: merge it now, then verify the merge."""
+        job = self.store.job(job_id)
+        if job["state"] != "awaiting_review":
+            raise ValueError(f"{job_id} is {job['state']}; only jobs awaiting review can be merged")
+        merged = self._delivery_for(job).merge(job, job["data"].get("delivery", {}))
+        self.store.approve(job_id, by, "approve", "merged from review")
+        self.store.update_job(job_id, "merged", merged=merged, merged_at=time.time(), merged_by=by)
+        self.store.event(job_id, "job.merged", "human", {"by": by})
+        return self.run_job(job_id)
+
+    def reject_job(self, job_id: str, by: str = "human", reason: str = "") -> None:
+        """A human gives up on a job. Its branch is kept; the work counts as waste, not output."""
+        job = self.store.job(job_id)
+        if job["state"] in ("done", "rejected"):
+            raise ValueError(f"{job_id} is already {job['state']}")
+        self.store.approve(job_id, by, "reject", reason)
+        self.store.update_job(job_id, "rejected", outcome=f"rejected by {by}: {reason}".strip(": "))
+        self.store.event(job_id, "job.rejected", "human", {"by": by, "reason": reason})
+
     def _s_merging(self, job: dict[str, Any]) -> None:
         merged = self.delivery.merge(job, job["data"].get("delivery", {}))
-        self.store.update_job(job["id"], "observing", merged=merged, merged_at=time.time())
+        self.store.update_job(job["id"], "merged", merged=merged, merged_at=time.time(), merged_by="agent")
 
-    def _s_observing(self, job: dict[str, Any]) -> None:
+    def _s_merged(self, job: dict[str, Any]) -> None:
+        """Merged is not done: the default branch must still pass, and the deploy gate must hold."""
+        failure = self._post_merge_checks()
+        if failure:
+            self.store.update_job(job["id"], post_merge={"status": "fail", "detail": failure[:4000]})
+            return self._needs_human(job, f"post-merge check failed on {self.cfg.default_branch}: "
+                                          f"{failure[:600]}")
+        self.store.update_job(job["id"], post_merge={"status": "pass"})
         result: GateResult = self.observe.check(job, job["data"].get("merged_at", time.time()))
         self.store.update_job(job["id"], post_deploy=result.__dict__)
         if result.status == "fail":
             return self._needs_human(job, f"post-deploy gate failed: {result.detail}")
-        self.store.update_job(job["id"], "done", outcome="merged")
-        self._finish(job, f"merged; post-deploy: {result.status}")
+        self.store.update_job(job["id"], "done", outcome="shipped", done_at=time.time())
+        self._finish(job, f"shipped: merged, post-merge checks pass, post-deploy {result.status}")
+
+    _s_observing = _s_merged  # jobs saved before the rename
+
+    def _post_merge_checks(self) -> str:
+        """Run observe.post_merge commands on the default branch tip in a throwaway worktree.
+        Returns '' when they pass (or none are configured), else the failing output."""
+        commands = self.cfg.get("observe.post_merge") or []
+        if not commands:
+            return ""
+        tmp = Path(tempfile.mkdtemp(prefix="asf-postmerge-"))
+        wt = tmp / "main"
+        git(self.repo, "worktree", "add", "--detach", "-q", str(wt), self.cfg.default_branch)
+        try:
+            for cmd in commands:
+                res = run(cmd, cwd=wt, timeout=self.cfg.get("execution.command_timeout_s", 900),
+                          env=sandbox_env(self.cfg.get("execution.env")))
+                if not res.ok:
+                    return f"`{cmd}` failed:\n{res.tail(3000)}"
+            return ""
+        finally:
+            run(["git", "-C", str(self.repo), "worktree", "remove", "--force", str(wt)], shell=False)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def migrate_legacy(self) -> int:
+        """Jobs saved when 'done' meant 'delivered' become awaiting_review; returns how many."""
+        n = 0
+        for job in self.store.jobs(["done"]):
+            if job["data"].get("outcome") == "delivered for human merge":
+                self.store.update_job(job["id"], "awaiting_review", outcome="",
+                                      delivered_at=job["data"].get("delivered_at") or job["updated"])
+                n += 1
+        return n
 
     def _finish(self, job: dict[str, Any], message: str) -> None:
         job = self.store.job(job["id"])
         self.notify("done", job, message)
+        self._release_sandbox(job)
+
+    def _release_sandbox(self, job: dict[str, Any]) -> None:
         if not self.cfg.get("execution.keep_sandboxes", False):
             try:
-                self._sandbox(job).destroy()
+                self._sandbox(self.store.job(job["id"])).destroy()
             except Exception:  # noqa: BLE001
                 pass
 

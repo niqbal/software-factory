@@ -43,17 +43,23 @@ STATES = [
     "queued",             # waiting for triage
     "triaged",            # tier guessed, acceptance criteria fixed, sandbox not yet created
     "implementing",
+    "awaiting_owner",     # an owner-only change was proposed on its own branch; resumes once merged
     "testing",            # independent tester
     "verifying",          # deterministic gates, CI fixer on failure
     "reviewing",          # LLM reviewers required by the tier
     "committing",
     "delivering",         # branch / draft PR
+    "awaiting_review",    # delivered; a human reviews and merges (or the agent does, by policy)
     "awaiting_approval",  # only when the agent is allowed to merge after approval
     "merging",
-    "observing",          # post-deploy gate
-    "done",
+    "merged",             # on the default branch; post-merge checks and post-deploy gate run here
+    "done",               # merged AND verified after merge: the only state that counts as shipped
 ]
 TERMINAL = {"done", "failed", "rejected", "needs_human"}
+# Waiting on something outside the factory: run_job returns, and a later run re-checks.
+WAITING = {"awaiting_review", "awaiting_approval", "awaiting_owner"}
+# Delivered and not yet shipped.
+DELIVERED = {"awaiting_review", "awaiting_approval", "merging", "merged"}
 HALTED = {"paused"}
 
 
