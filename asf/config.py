@@ -99,7 +99,7 @@ DEFAULTS: dict[str, Any] = {
         "denied_command_patterns": [],
     },
     "notifications": {"providers": ["console"], "on": ["needs_human", "awaiting_approval",
-                                                       "awaiting_review", "awaiting_owner",
+                                                       "awaiting_review",
                                                        "done", "failed", "paused"]},
     "context": {"instruction_files": ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md",
                                       ".cursorrules", ".github/copilot-instructions.md"],

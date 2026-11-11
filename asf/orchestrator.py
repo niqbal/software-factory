@@ -24,7 +24,7 @@ from .gates import GateRunner
 from .models import DELIVERED, TERMINAL, WAITING, AgentResult, GateResult, WorkItem
 from .report import render_report
 from .store import Store
-from .util import git, run, sandbox_env, slugify
+from .util import any_match, git, run, sandbox_env, slugify
 
 TRIAGE_SCHEMA = {
     "type": "object",
@@ -574,12 +574,31 @@ class Factory:
             revisions = job["data"]["revisions"]
             revisions[-1] = {**revision, "commit": sha, "summary": job["data"].get("implementer", "")}
             self.store.update_job(job["id"], revisions=revisions)
+        self.store.update_job(job["id"], owner_review=self._owner_review(job, sb, sha))
         job = self.store.job(job["id"])
         report = render_report(job, item, self.store.runs(job["id"]), self.store.job_cost(job["id"]))
         path = self.state_dir / "reports" / f"{job['id']}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(report)
         self.store.update_job(job["id"], "delivering", commit=sha, report=str(path))
+
+    def owner_paths(self) -> list[str]:
+        """Paths only the owner may approve: owner_review.paths, else every tier-3 path rule."""
+        explicit = self.cfg.get("owner_review.paths")
+        if explicit:
+            return list(explicit)
+        return [p for r in self.cfg.get("tiers.rules", []) if r.get("tier", 0) >= 3 for p in r["paths"]]
+
+    def _owner_review(self, job: dict[str, Any], sb: Sandbox, sha: str) -> dict[str, Any]:
+        """The small part of a change the owner must look at: owner-only files, their diff, and
+        the agent's OWNER REVIEW notes (AGENTS.md convention)."""
+        files = sorted(set(git(Path(sb.root), "diff", "--name-only", sb.base_sha, sha).split()))
+        owned = [f for f in files if any_match(f, self.owner_paths())]
+        notes = owner_notes(job["data"].get("implementer", ""))
+        if not owned and not notes:
+            return {}
+        diff = git(Path(sb.root), "diff", sb.base_sha, sha, "--", *owned) if owned else ""
+        return {"files": owned, "notes": notes, "diff": diff[:20000], "truncated": len(diff) > 20000}
 
     def _s_delivering(self, job: dict[str, Any]) -> None:
         d = job["data"]["decision"]
@@ -623,16 +642,10 @@ class Factory:
     def _s_awaiting_review(self, job: dict[str, Any]) -> None:
         return None  # handled by _review_settled
 
-    def _s_awaiting_owner(self, job: dict[str, Any]) -> None:
-        return None  # handled by _owner_settled
-
-    def _owner_settled(self, job: dict[str, Any]) -> bool:
-        return False  # replaced below with proposal handling
-
     def _waiting_settled(self, job: dict[str, Any]) -> bool:
         """True when a waiting job's condition resolved (its state has changed)."""
-        return {"awaiting_approval": self._approvals_settled, "awaiting_review": self._review_settled,
-                "awaiting_owner": self._owner_settled}[job["state"]](job)
+        return {"awaiting_approval": self._approvals_settled,
+                "awaiting_review": self._review_settled}[job["state"]](job)
 
     def _branch_status(self, branch: str | None) -> str:
         """'merged', 'open' or 'gone' for a branch relative to the default branch."""
@@ -703,6 +716,14 @@ class Factory:
         commands = self.cfg.get("observe.post_merge") or []
         if not commands:
             return ""
+        tip = git(self.repo, "rev-parse", self.cfg.default_branch).strip()
+        cache = self.__dict__.setdefault("_post_merge_cache", {})
+        if tip in cache:  # several jobs merged onto the same commit: check it once
+            return cache[tip]
+        cache[tip] = self._run_post_merge(commands)
+        return cache[tip]
+
+    def _run_post_merge(self, commands: list[str]) -> str:
         tmp = Path(tempfile.mkdtemp(prefix="asf-postmerge-"))
         wt = tmp / "main"
         git(self.repo, "worktree", "add", "--detach", "-q", str(wt), self.cfg.default_branch)
@@ -746,3 +767,13 @@ def _real_question(q: Any) -> bool:
         return bool(q)
     t = q.strip().strip('"\'` ').lower()
     return t not in ("", "none", "null", "n/a", "na", "no", "-")
+
+
+def owner_notes(summary: str) -> str:
+    """The text after 'OWNER REVIEW:' in an agent summary, up to the next blank line pair."""
+    i = summary.find("OWNER REVIEW:")
+    if i < 0:
+        return ""
+    rest = summary[i + len("OWNER REVIEW:"):]
+    end = rest.find("\n\n\n")
+    return (rest if end < 0 else rest[:end]).strip()

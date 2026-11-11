@@ -22,6 +22,15 @@ def render_report(job: dict[str, Any], item: WorkItem, runs: list[dict[str, Any]
             lines += [f"**Revision {rv['n']}** (`{rv['commit'][:10]}`), from review notes:", ""]
             lines += [f"- {n}" for n in rv["notes"]]
             lines += [""]
+    owner = d.get("owner_review") or {}
+    if owner:
+        lines += ["### Owner review", "",
+                  "This change touches code only the owner approves. Review exactly these lines:", ""]
+        if owner.get("notes"):
+            lines += [owner["notes"], ""]
+        if owner.get("files"):
+            lines += ["Files: " + ", ".join(f"`{f}`" for f in owner["files"]), "",
+                      "```diff", owner.get("diff", "").rstrip(), "```", ""]
     lines += ["### Summary" + (" of the latest revision" if revisions else ""), "",
               (d.get("implementer") or "").strip() or "(no summary)", ""]
     acc = d.get("acceptance", [])

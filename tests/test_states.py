@@ -52,3 +52,19 @@ def test_legacy_delivered_jobs_migrate(invoice_repo, state, store):
     store.update_job(job_id, "done", outcome="delivered for human merge")  # how old versions saved it
     assert f.migrate_legacy() == 1
     assert store.job(job_id)["state"] == "awaiting_review"
+
+
+def test_owner_review_lists_owner_only_lines(invoice_repo, state, store):
+    f, job_id = delivered(invoice_repo, state, store, **{"owner_review.paths": ["invoice/totals.py"]})
+    d = store.job(job_id)["data"]
+    owner = d["owner_review"]
+    assert owner["files"] == ["invoice/totals.py"]           # the test file is not owner-only
+    assert "invoice/totals.py" in owner["diff"] and "tests/test_discount.py" not in owner["diff"]
+    assert "### Owner review" in open(d["report"]).read()
+
+
+def test_owner_notes_are_extracted():
+    from asf.orchestrator import owner_notes
+    s = "Fixed rounding.\nOWNER REVIEW:\n- server.go: added TokenKey to Config (needed for signing)\n"
+    assert owner_notes(s).startswith("- server.go: added TokenKey")
+    assert owner_notes("no special changes") == ""

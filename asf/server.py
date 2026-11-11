@@ -76,7 +76,7 @@ def worker_loop(factory: Factory, stop: threading.Event, interval: float = 5.0) 
     while not stop.is_set():
         for job in factory.store.jobs(["queued", "triaged", "implementing", "testing", "verifying",
                                        "reviewing", "committing", "delivering", "awaiting_approval",
-                                       "awaiting_review", "awaiting_owner", "merging", "merged",
+                                       "awaiting_review", "merging", "merged",
                                        "observing"]):
             if stop.is_set() or factory.paused():
                 break

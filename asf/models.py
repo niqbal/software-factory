@@ -43,7 +43,6 @@ STATES = [
     "queued",             # waiting for triage
     "triaged",            # tier guessed, acceptance criteria fixed, sandbox not yet created
     "implementing",
-    "awaiting_owner",     # an owner-only change was proposed on its own branch; resumes once merged
     "testing",            # independent tester
     "verifying",          # deterministic gates, CI fixer on failure
     "reviewing",          # LLM reviewers required by the tier
@@ -57,7 +56,7 @@ STATES = [
 ]
 TERMINAL = {"done", "failed", "rejected", "needs_human"}
 # Waiting on something outside the factory: run_job returns, and a later run re-checks.
-WAITING = {"awaiting_review", "awaiting_approval", "awaiting_owner"}
+WAITING = {"awaiting_review", "awaiting_approval"}
 # Delivered and not yet shipped.
 DELIVERED = {"awaiting_review", "awaiting_approval", "merging", "merged"}
 HALTED = {"paused"}

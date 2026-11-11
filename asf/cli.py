@@ -235,28 +235,22 @@ def cmd_events(app: App) -> int:
 
 
 def cmd_report(app: App) -> int:
-    s = app.store
-    jobs = s.jobs()
-    states = Counter(j["state"] for j in jobs)
-    delivered = [j for j in jobs if j["state"] == "done"]
-    total = sum(r["cost_usd"] for r in s.runs())
-    print(f"Jobs: {len(jobs)}  " + ", ".join(f"{k} {v}" for k, v in states.most_common()))
-    print(f"Total model spend: ${total:.2f}; per delivered job: "
-          f"${(total / len(delivered)) if delivered else 0:.2f}")
+    from . import metrics
+    m = metrics.compute(app.store)
+    if getattr(app.args, "json", False):
+        print(json.dumps(m, indent=2))
+        return 0
+    print(metrics.render_text(m))
     gate_status: Counter[str] = Counter()
     denials = 0
-    for j in jobs:
+    for j in app.store.jobs():
         for g in j["data"].get("gates", []):
             gate_status[f"{g['name']}:{g['status']}"] += 1
-    for e in s.events():
+    for e in app.store.events():
         if e["type"] == "tool.call" and e["payload"].get("decision") == "deny":
             denials += 1
     print("Gate outcomes: " + (", ".join(f"{k} {v}" for k, v in sorted(gate_status.items())) or "-"))
     print(f"Policy denials of agent tool calls: {denials}")
-    for j in delivered:
-        minutes = (j["updated"] - j["created"]) / 60
-        print(f"  {j['id']} tier {j['tier']} delivered in {minutes:.0f} min: "
-              f"{(j['data'].get('delivery') or {}).get('url') or (j['data'].get('delivery') or {}).get('branch')}")
     return 0
 
 
@@ -394,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("events")
     s.add_argument("job", nargs="?")
     s.add_argument("--jsonl", action="store_true")
-    sub.add_parser("report", help="factory metrics")
+    sub.add_parser("report", help="factory metrics (counts only shipped work)").add_argument("--json", action="store_true")
     for name in ("approve", "reject"):
         s = sub.add_parser(name)
         s.add_argument("job")
