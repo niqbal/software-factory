@@ -57,3 +57,9 @@ def test_preexisting_failures_are_not_blamed(tmp_path, state):
     res = [r for r in GateRunner(cfg, sb, 2, state, base_sandbox=lambda: prov.base_checkout(sb.base_sha))
            .run(["test"]) if r.name == "test"][0]
     assert res.status == "fail" and "test_new2" in res.detail
+
+
+def test_go_subtest_failures_are_counted():
+    from asf.gates import failing_ids
+    out = "--- FAIL: TestContract (0.01s)\n    --- FAIL: TestContract/StartIsIdempotent (0.00s)\n"
+    assert failing_ids(out) == {"TestContract", "TestContract/StartIsIdempotent"}

@@ -28,7 +28,7 @@ FAIL_PATTERNS = [
     re.compile(r"^\s*FAIL\s+(\S+)", re.M),                          # jest / vitest file
     re.compile(r"^\s*[×✗]\s+(.+?)(?:\s+\d+ms)?$", re.M),              # vitest test line
     re.compile(r"^FAILED\s+(\S+?)(?:\s+-\s.*)?$", re.M),               # pytest
-    re.compile(r"^--- FAIL: (\S+)", re.M),                            # go test
+    re.compile(r"^\s*--- FAIL: (\S+)", re.M),                         # go test, including subtests
     re.compile(r"^(\S+?)\(\d+,\d+\): error (TS\d+)", re.M),           # tsc
     re.compile(r"^(\S+?):\d+:\d+: error (TS\d+)", re.M),              # tsc --pretty false variants
     re.compile(r"^(\S+\.\w+):\d+:\d+:\s+(\w[\w-]*)\s", re.M),          # ruff / eslint unix format

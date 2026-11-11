@@ -183,7 +183,7 @@ class Factory:
             self._sandbox(job).reset(revision["from_commit"] if revision else None)
             self.store.event(job_id, "sandbox.reset", "factory", {"reason": "retry"})
         self.store.update_job(job_id, target, error="", needs_human_reason="", feedback="",
-                              tester_rounds=0, review_rounds=0, ci_rounds=0)
+                              tester_rounds=0, review_rounds=0, ci_rounds=0, failed_state="")
         return target
 
     def revise(self, job_id: str, notes: list[str], extra_usd: float = 0.0) -> str:
@@ -520,6 +520,9 @@ class Factory:
                 return self._needs_human(job, f"gates failed; CI fixer: {res.data['blocked_reason']}")
             return  # state stays verifying; gates re-run
         summary = "; ".join(f"{r.name}{'/' + r.package if r.package else ''}: {r.detail}" for r in failed)
+        # Retry re-enters at verification with the same sandbox: the work stays, the gates rerun
+        # (often after a human changed policy, e.g. a diff limit), and no model spend is repeated.
+        self.store.update_job(job["id"], failed_state="verifying")
         self._needs_human(self.store.job(job["id"]), f"gates failed: {summary}")
 
     def _s_reviewing(self, job: dict[str, Any]) -> None:

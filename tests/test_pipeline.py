@@ -243,3 +243,18 @@ def test_retry_starts_implementation_from_base(invoice_repo, state, store):
     assert f.run_job(job_id) == "done"
     assert "invoice/half_done.py" not in store.job(job_id)["data"]["changed"]
     del orig
+
+
+def test_retry_after_gate_failure_resumes_at_verification(invoice_repo, state, store):
+    tight = {f"limits.max_changed_lines.tier_{t}": 1 for t in range(4)}
+    prov = provider()
+    f = factory(invoice_repo, state, store, prov, **tight)
+    job_id, _ = f.submit(item())
+    assert f.run_job(job_id) == "needs_human"
+    assert "diff_size" in store.job(job_id)["data"]["needs_human_reason"]
+    implementer_calls = [r for r, _ in prov.log].count("implementer")
+    # A human relaxes the policy; the retry reruns the gates on the same work, no re-implementing.
+    f2 = factory(invoice_repo, state, store, prov)
+    assert f2.retry(job_id) == "verifying"
+    assert f2.run_job(job_id) == "done"
+    assert [r for r, _ in prov.log].count("implementer") == implementer_calls
