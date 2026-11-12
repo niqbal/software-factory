@@ -17,7 +17,11 @@ since they share subscriptions. A limit blocks only the projects that have no ot
 backend. A project on a pool of backends keeps going: with `auto_resume`, the interrupted job
 is retried at once and routes to the next backend; otherwise it waits for the reset.
 
-    scheduler: {mode: priority, concurrency: 1, auto_resume: true}
+With `auto_retry`, a job that stopped without needing a human (a transient backend error, or an
+attempt that ended without finishing; see Factory.retry_reason) is retried after a short delay,
+up to `limits.auto_retries` times per job. Each retry is a `job.auto_retry` event on the job.
+
+    scheduler: {mode: priority, concurrency: 1, auto_resume: true, auto_retry: true}
 """
 
 from __future__ import annotations
@@ -34,9 +38,10 @@ from .models import STATES, TERMINAL, WAITING
 from .projects import asf_home
 
 MODES = ("priority", "combined", "separate")
-DEFAULTS = {"mode": "priority", "concurrency": 1, "auto_resume": True}
+DEFAULTS = {"mode": "priority", "concurrency": 1, "auto_resume": True, "auto_retry": True}
 STAGE = {s: i for i, s in enumerate(STATES)}
 INTAKE_EVERY = 60.0
+RETRY_AFTER = 60.0   # seconds a stopped job stays visible before an automatic retry
 
 
 def load_settings() -> dict[str, Any]:
@@ -201,6 +206,7 @@ class Scheduler:
         try:
             while not self.stop_event.is_set():
                 self._resume_limited()
+                self._retry_stopped()
                 cap = int(self.settings["concurrency"])
                 free = cap - len(self.running)
                 if free > 0:
@@ -241,6 +247,31 @@ class Scheduler:
                 with self.lock:
                     self.running.pop(slot, None)
         threading.Thread(target=go, daemon=True).start()
+
+    # ---------------------------------------------------------- automatic retry --
+    def _retry_stopped(self, now: float | None = None) -> None:
+        """Retry jobs that stopped without needing a human, once they have sat RETRY_AFTER seconds.
+
+        Reads the stored jobs each time, so jobs stopped by a console run, `asf run` or before a
+        restart are covered too. The retried job becomes runnable and is picked like any other."""
+        if not self.settings.get("auto_retry", True):
+            return
+        now = now or time.time()
+        for p, c in self._projects():
+            try:
+                for j in c.f.store.jobs(["failed", "needs_human"]):
+                    if j["id"] in c.busy or now - (j.get("updated") or 0) < RETRY_AFTER:
+                        continue
+                    if not c.f.retry_reason(j) or j["data"].get("auto_retry_exhausted"):
+                        continue
+                    state = c.f.auto_retry(j["id"])
+                    if state:
+                        n = c.f.store.job(j["id"])["data"].get("auto_retries", 0)
+                        self._say(f"{p.key}: {j['id']} retried automatically (#{n}) from {state}")
+                    else:
+                        self._say(f"{p.key}: {j['id']} stopped again; automatic retries used up")
+            except Exception as e:  # noqa: BLE001 - one project's trouble must not stop the loop
+                self._say(f"{p.key}: automatic retry failed: {e}")
 
     # ------------------------------------------------------------- usage limits --
     def _hit_limit(self, project: str, job_id: str, err: str) -> None:

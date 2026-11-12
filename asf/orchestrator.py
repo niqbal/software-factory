@@ -8,6 +8,7 @@ stopped with `asf run --job <id>`.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -15,7 +16,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import policy
+from . import limits, policy
 from .adapters import base as adapters
 from .adapters.base import AdapterContext, ModelProvider, Sandbox
 from .agents.roles import BudgetExceeded, PromptBuilder, run_agent, work_item_block
@@ -44,6 +45,12 @@ TRIAGE_SCHEMA = {
     "additionalProperties": False,
 }
 MONTH = 30 * 24 * 3600
+# Errors worth one more try without a human: the backend or network hiccuped, the work didn't.
+TRANSIENT_ERRORS = [re.compile(p, re.I) for p in (
+    r"\bHTTP 5\d\d\b", r"\[unavailable\]", r"service unavailable", r"bad gateway",
+    r"gateway time-?out", r"timed? ?out", r"connection (reset|refused|aborted|error)",
+    r"temporar(il)?y", r"network", r"ECONNRESET", r"EPIPE", r"broken pipe", r"internal server error",
+)]
 
 
 class Factory:
@@ -174,23 +181,110 @@ class Factory:
                               extra_budget_usd=job["data"].get("extra_budget_usd", 0) + extra_usd,
                               extra_minutes=job["data"].get("extra_minutes", 0) + extra_minutes)
 
-    def retry(self, job_id: str) -> str:
-        """Re-enter a failed or needs_human job at the step that stopped it."""
+    def retry(self, job_id: str, auto: bool = False, keep_work: bool = False) -> str:
+        """Re-enter a failed or needs_human job at the step that stopped it.
+
+        A human retry also resets the count of automatic retries (see auto_retry). With
+        `keep_work`, an implementation interrupted by a transient error is continued from the
+        half-finished working tree instead of starting again from the base commit."""
         job = self.store.job(job_id)
         if job["state"] not in ("failed", "needs_human"):
             raise ValueError(f"{job_id} is {job['state']}; only failed or needs_human jobs can be retried")
         target = job["data"].get("failed_state") or ("implementing" if job["data"].get("sandbox") else "queued")
         if target == "deploying":
             self.__dict__.pop("_deploy_cache", None)  # run the deploy again, not its cached failure
+        partial: list[str] = []
         if target == "implementing" and job["data"].get("sandbox"):
-            # A fresh attempt starts from the base commit, not from a half-finished one. During a
-            # revision the base is the delivered commit: the work already on the branch is kept.
+            sb = self._sandbox(job)
             revision = self._active_revision(job)
-            self._sandbox(job).reset(revision["from_commit"] if revision else None)
-            self.store.event(job_id, "sandbox.reset", "factory", {"reason": "retry"})
+            if keep_work:
+                partial = sb.uncommitted_files() if revision else sb.changed_files()
+            if partial:
+                self.store.event(job_id, "sandbox.kept", "factory", {"reason": "retry", "files": partial[:200]})
+            else:
+                # A fresh attempt starts from the base commit, not from a half-finished one. During a
+                # revision the base is the delivered commit: the work already on the branch is kept.
+                sb.reset(revision["from_commit"] if revision else None)
+                self.store.event(job_id, "sandbox.reset", "factory", {"reason": "retry"})
         self.store.update_job(job_id, target, error="", needs_human_reason="", feedback="",
-                              tester_rounds=0, review_rounds=0, ci_rounds=0, failed_state="")
+                              tester_rounds=0, review_rounds=0, ci_rounds=0, failed_state="",
+                              incomplete=False, partial_work=partial,
+                              **({} if auto else {"auto_retries": 0, "auto_retry_exhausted": False}))
         return target
+
+    def retry_reason(self, job: dict[str, Any]) -> str | None:
+        """Why a stopped job can be retried without a human, or None when it needs one.
+
+        Two kinds of stop qualify: a failure from a transient backend or network error, and a
+        needs_human stop marked `incomplete` (the agent did not finish; nobody was asked anything).
+        Usage limits are not handled here: the scheduler waits for the reset instead.
+        """
+        d = job["data"]
+        if job["state"] == "failed":
+            err = d.get("error") or ""
+            if not limits.is_limit_error(err) and any(p.search(err) for p in TRANSIENT_ERRORS):
+                return f"transient error: {err.strip()[:200]}"
+        if job["state"] == "needs_human" and d.get("incomplete"):
+            return f"incomplete: {(d.get('needs_human_reason') or '').strip()[:200]}"
+        return None
+
+    def auto_retry(self, job_id: str) -> str | None:
+        """Retry a job that stopped without needing a human, up to `limits.auto_retries` times.
+
+        Returns the state it re-enters, or None (nothing to retry, or the retries are used up;
+        then the job stays parked for a human and an event says so)."""
+        job = self.store.job(job_id)
+        reason = self.retry_reason(job)
+        if not reason:
+            return None
+        cap = int(self.cfg.get("limits.auto_retries", 2) or 0)
+        done = int(job["data"].get("auto_retries", 0))
+        if done >= cap:
+            if not job["data"].get("auto_retry_exhausted"):
+                self.store.update_job(job_id, auto_retry_exhausted=True)
+                self.store.event(job_id, "job.auto_retry_exhausted", "factory",
+                                 {"retries": done, "reason": reason})
+                self.notify("needs_human", self.store.job(job_id),
+                            f"gave up after {done} automatic retr{'y' if done == 1 else 'ies'}; {reason}")
+            return None
+        self.store.event(job_id, "job.auto_retry", "factory",
+                         {"attempt": done + 1, "of": cap, "from": job["state"], "reason": reason})
+        self.store.update_job(job_id, auto_retries=done + 1)
+        # The backend failed, not the work: continue it. An incomplete attempt starts afresh.
+        return self.retry(job_id, auto=True, keep_work=job["state"] == "failed")
+
+    def rerun(self, job_id: str, by: str = "human") -> str:
+        """Replace a stopped job with a new job for the same work item, from the current default branch.
+
+        The item is fetched again from its own intake source (it may have been edited). Nothing
+        changes unless the new job is created: a failed fetch leaves the old job as it was and
+        records why on it. Returns the new job's id."""
+        job = self.store.job(job_id)
+        if job["state"] not in ("rejected", "failed", "needs_human"):
+            raise ValueError(f"{job_id} is {job['state']}; only failed, needs_human or rejected jobs can be rerun")
+        stored = self.store.get_work_item(job["work_item_id"])
+        try:
+            adapter = self.intake_adapters().get(stored.source_kind)
+            if adapter is None:
+                raise ValueError(f"intake {stored.source_kind!r} is not enabled in factory.yaml")
+            fresh = adapter.fetch(stored.external_id)
+        except Exception as e:  # noqa: BLE001 - recorded on the job, then refused
+            msg = f"could not fetch {stored.source_kind}:{stored.external_id}: {e}"
+            self.store.event(job_id, "job.rerun_failed", "factory", {"by": by, "error": msg})
+            raise ValueError(msg) from e
+        fresh.id = stored.id
+        self.store.update_work_item(fresh)
+        new_id, created = self.store.create_job(fresh, {"started": time.time(), "rerun_of": job_id}, rerun=True)
+        if not created:
+            msg = f"{stored.source_kind}:{stored.external_id} already has an active job {new_id}"
+            self.store.event(job_id, "job.rerun_failed", "factory", {"by": by, "error": msg})
+            raise ValueError(msg)
+        if job["state"] != "rejected":
+            self.reject_job(job_id, by=by, reason=f"replaced by rerun {new_id}")
+        self.store.update_job(job_id, rerun_as=new_id)
+        self.store.event(job_id, "job.rerun", "human", {"by": by, "new_job": new_id})
+        self.echo(f"rerun {job_id} -> {new_id}")
+        return new_id
 
     def revise(self, job_id: str, notes: list[str], extra_usd: float = 0.0) -> str:
         """Send a delivered, unmerged job back to the implementer with a reviewer's notes.
@@ -425,8 +519,10 @@ class Factory:
     def _current_tier(self, job: dict[str, Any]) -> int:
         return job["tier"] if job["tier"] is not None else job["data"].get("pre_tier", 2)
 
-    def _needs_human(self, job: dict[str, Any], reason: str) -> None:
-        self.store.update_job(job["id"], "needs_human", needs_human_reason=reason)
+    def _needs_human(self, job: dict[str, Any], reason: str, incomplete: bool = False) -> None:
+        """Park a job for a human. `incomplete` marks a stop where the work simply did not
+        finish and no human decision is asked for, so the scheduler may retry it on its own."""
+        self.store.update_job(job["id"], "needs_human", needs_human_reason=reason, incomplete=incomplete)
         self.notify("needs_human", self.store.job(job["id"]), reason)
 
     # -------------------------------------------------------------- states ---
@@ -468,6 +564,14 @@ class Factory:
                      "A human reviewed it and asked for revisions. Keep what is right, change only what "
                      "the notes ask for, and do not start over:\n"
                      + "\n".join(f"- {n}" for n in revision["notes"]))
+        partial = job["data"].get("partial_work") or []
+        if partial:
+            listed = "\n".join(f"- {p}" for p in partial[:50]) + (
+                f"\n- ... and {len(partial) - 50} more" if len(partial) > 50 else "")
+            text += ("\n\nAn earlier attempt at this task was cut off by a backend error, not by a problem "
+                     "with the work. Its unfinished changes are still in the working tree, in these files:\n"
+                     + listed + "\nRead them first. Keep what is right, fix what is not, and finish the "
+                     "task from there; do not start over.")
         feedback = job["data"].get("feedback")
         if feedback:
             text += "\n\nThe previous attempt needs changes. Address these findings:\n" + feedback
@@ -476,12 +580,19 @@ class Factory:
     def _s_implementing(self, job: dict[str, Any]) -> None:
         tier = self._current_tier(job)
         res = self._agent(job, "implementer", self._task(job), tier)
+        if job["data"].get("partial_work"):
+            self.store.update_job(job["id"], partial_work=[])  # handed over; later rounds don't repeat it
         if res.data.get("blocked_reason"):
-            return self._needs_human(job, f"implementer blocked: {res.data['blocked_reason']}")
+            # Blocked on its own initiative it needs a human. Blocked only after the factory
+            # nudged it to finish, it was cut short: a fresh attempt may get through.
+            return self._needs_human(job, f"implementer blocked: {res.data['blocked_reason']}",
+                                     incomplete=bool(res.data.get("nudged")))
         sb = self._sandbox(job)
         changed = sb.uncommitted_files() if self._active_revision(job) else sb.changed_files()
         if not changed:
-            return self._needs_human(job, f"implementer made no changes: {res.summary[:500]}")
+            # Nothing was produced and nobody was asked anything: the attempt just did not finish.
+            return self._needs_human(job, f"implementer made no changes: {res.summary[:500]}",
+                                     incomplete=True)
         self.store.update_job(job["id"], "testing", implementer=res.summary, feedback="",
                               acceptance_met=res.data.get("acceptance_met", []))
 

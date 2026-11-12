@@ -63,6 +63,12 @@ class Store:
                              json.dumps(item.to_dict()), now()))
             return item, True
 
+    def update_work_item(self, item: WorkItem) -> None:
+        """Replace a stored item's payload with a fresh copy from its source (same id)."""
+        with self._lock:
+            self.db.execute("UPDATE work_items SET payload=? WHERE id=?",
+                            (json.dumps(item.to_dict()), item.id))
+
     def get_work_item(self, item_id: str) -> WorkItem:
         row = self.db.execute("SELECT payload FROM work_items WHERE id=?", (item_id,)).fetchone()
         if not row:

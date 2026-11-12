@@ -37,6 +37,14 @@ class FakeFactory:
         self.retried.append(job_id)
         self.store.job(job_id)["state"] = "implementing"
 
+    def retry_reason(self, j):
+        return "transient error" if j["data"].get("transient") else None
+
+    def auto_retry(self, job_id):
+        self.retried.append(job_id)
+        self.store.job(job_id)["state"] = "queued"
+        return "queued"
+
 
 def project(key, prio, jobs, models=None):
     p = SimpleNamespace(key=key, priority=prio, archived=False, available=True, hidden=False)
@@ -116,3 +124,22 @@ def test_pooled_project_moves_to_the_other_backend_at_once(tmp_path, monkeypatch
 def test_limit_detection():
     assert limits.is_limit_error("claude -p error: You've hit your 5-hour limit · resets 1pm (Asia/Karachi)")
     assert not limits.is_limit_error("gates failed: diff_size")
+
+
+def test_jobs_stopped_without_needing_a_human_are_retried_after_a_delay(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASF_HOME", str(tmp_path))
+    now = 10_000.0
+    jobs = [{**job("flaky", "failed"), "updated": now - 5, "data": {"transient": True}},
+            {**job("stuck", "needs_human"), "updated": now - 600, "data": {}},
+            {**job("spent", "failed"), "updated": now - 600, "data": {"transient": True,
+                                                                     "auto_retry_exhausted": True}}]
+    p, c = project("a", 1, jobs)
+    s = Scheduler(SimpleNamespace(projects=lambda: [p], console=lambda k: c))
+    s._retry_stopped(now)
+    assert c.f.retried == []                      # just stopped: stays visible for a while first
+    s._retry_stopped(now + sched_mod.RETRY_AFTER)
+    assert c.f.retried == ["flaky"]               # a real block and used-up retries wait for a human
+    sched_mod.save_settings(auto_retry=False)
+    c.f.store.job("flaky").update(state="failed")
+    s._retry_stopped(now + 999)
+    assert c.f.retried == ["flaky"]

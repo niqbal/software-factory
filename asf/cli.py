@@ -305,6 +305,12 @@ def cmd_retry(app: App) -> int:
     return 0
 
 
+def cmd_rerun(app: App) -> int:
+    new = app.factory.rerun(app.args.job, by=app.args.by or "human")
+    print(f"{app.args.job} replaced by {new} (from the current default branch); run `asf run --job {new}`")
+    return 0
+
+
 def cmd_revise(app: App) -> int:
     notes = list(app.args.note or [])
     if app.args.notes_file:
@@ -452,6 +458,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="extend the time budget, e.g. after time spent paused")
     s = sub.add_parser("retry", help="re-enter a failed or needs_human job at the failing step")
     s.add_argument("job")
+    s = sub.add_parser("rerun", help="replace a stopped job with a new one for the same item, from the default branch")
+    s.add_argument("job")
+    s.add_argument("--by")
     s = sub.add_parser("revise", help="send a delivered, unmerged job back with review notes")
     s.add_argument("job")
     s.add_argument("--note", action="append", help="one revision note (repeatable)")
@@ -483,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
         "status": cmd_status, "events": cmd_events, "report": cmd_report, "ui": cmd_ui,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
-        "deploy": cmd_deploy, "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "publish": cmd_publish,
+        "deploy": cmd_deploy, "resume": cmd_resume, "retry": cmd_retry, "rerun": cmd_rerun, "revise": cmd_revise, "publish": cmd_publish,
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
         "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters,

@@ -378,6 +378,7 @@ function renderScheduler(sc) {
   $('sched').innerHTML = `<div class="line"><span class="seg">${seg}</span>
       <label class="hint">Concurrency <input class="prio" type="number" min="1" max="8" value="${sc.concurrency}" onchange="schedSet({concurrency:this.value})"></label>
       <label class="hint"><input type="checkbox" ${sc.auto_resume?'checked':''} onchange="schedSet({auto_resume:this.checked})"> resume jobs after a usage limit</label>
+      <label class="hint" title="Retry jobs that stopped on a transient error or did not finish, without waiting for you"><input type="checkbox" ${sc.auto_retry!==false?'checked':''} onchange="schedSet({auto_retry:this.checked})"> retry jobs that stopped without needing you</label>
       <span class="spacer"></span>
       ${sc.running ? '<button onclick="post(\'/api/scheduler/stop\', {}, \'stop\')">Stop</button>' : '<button class="primary" onclick="post(\'/api/scheduler/start\', {}, \'start\')">Start scheduler</button>'}</div>
     <div class="hint">${esc(MODE_HELP[sc.mode] || '')}</div>

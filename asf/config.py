@@ -77,6 +77,7 @@ DEFAULTS: dict[str, Any] = {
         "require_tests_for_code_changes": True,
         "fix_rounds": 1,           # implementer re-runs after tester/reviewer findings
         "ci_fix_rounds": 1,
+        "auto_retries": 2,         # retries without a human after a transient error or an unfinished attempt
     },
     "autonomy": {"shadow": True, "max_merge_tier": -1},
     "budgets": {

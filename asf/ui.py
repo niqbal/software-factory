@@ -295,11 +295,7 @@ class Console:
             self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
             return "running"
         if action == "rerun":
-            ext = self._titles().get(f.store.job(job_id)["work_item_id"], ("",))[0]
-            if f.store.job(job_id)["state"] not in ("rejected",):
-                f.reject_job(job_id, by=by, reason="rerun from current default branch")
-            new = f.poll(ids=[ext], rerun=True)
-            return f"rerun queued: {', '.join(new) or 'no new job (is the item still in the ready folder?)'}"
+            return f"rerun queued as {f.rerun(job_id, by=by)}"
         raise ValueError(f"unknown action {action}")
 
     def queue_item(self, item_id: str) -> str:
@@ -542,7 +538,7 @@ def make_handler(portfolio: Portfolio):
                     return self._send(200, {"message": portfolio.scheduler.stop()})
                 if parts == ["api", "scheduler", "settings"]:
                     from .scheduler import save_settings
-                    saved = save_settings(**{k: payload[k] for k in ("mode", "concurrency", "auto_resume") if k in payload})
+                    saved = save_settings(**{k: payload[k] for k in ("mode", "concurrency", "auto_resume", "auto_retry") if k in payload})
                     return self._send(200, {"message": f"scheduler: {saved['mode']} mode, concurrency {saved['concurrency']}"})
                 if len(parts) < 4 or parts[:2] != ["api", "p"]:
                     return self._send(404, {"error": "not found"})

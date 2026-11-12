@@ -89,13 +89,19 @@ def run_agent(provider: ModelProvider, cfg: Config, role: str, system: str, task
             continue
         if not nudged:
             finisher = "submit_review" if role in ("reviewer", "security") else "finish"
-            conv.add_user(f"You stopped without calling {finisher}. Call {finisher} now with your result.")
+            # Worded so the model does not read it as an order to stop: an earlier "call finish
+            # now" made an implementer give up mid-task and report itself blocked.
+            conv.add_user(f"You ended your turn without calling {finisher}. If the task is not done, "
+                          f"keep working with the tools. Call {finisher} only when it is done, or "
+                          "when a human must decide something you cannot.")
             nudged = True
             continue
         break
     result.data = dict(broker.state.result)
     result.data["files_touched"] = sorted(broker.state.touched)
     result.data["denials"] = broker.state.denials
+    result.data["finished"] = broker.state.finished
+    result.data["nudged"] = nudged
     result.summary = result.data.get("summary", "")
     result.ok = broker.state.finished and not result.data.get("blocked_reason")
     if not broker.state.finished:
