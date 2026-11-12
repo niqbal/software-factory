@@ -104,5 +104,5 @@ delivery:
   provider: local_git
 
 autonomy:
-  shadow: true
+  shadow: false
   max_merge_tier: -1
