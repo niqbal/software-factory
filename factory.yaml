@@ -29,9 +29,9 @@ intake:
   local:
     enabled: true
   github_issues:
-    enabled: false
+    enabled: true
     label: factory
-    write_back: false
+    write_back: true
 
 execution:
   provider: local_worktree
