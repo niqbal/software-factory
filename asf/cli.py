@@ -189,10 +189,60 @@ def cmd_doctor(app: App) -> int:
     return 0 if ok else 1
 
 
+def _fmt_issue_item(kind: str, item: WorkItem) -> str:
+    url = item.url or "-"
+    return f"- [{kind}] #{item.external_id} {item.title} ({url})"
+
+
 def cmd_intake(app: App) -> int:
-    jobs = app.factory.poll(app.args.source, app.args.id or None, rerun=app.args.rerun)
+    f = app.factory
+    adapters_by_kind = f.intake_adapters()
+    requested = app.args.source
+    targets = [(k, a) for k, a in adapters_by_kind.items() if not requested or k == requested]
+
+    jobs: list[str] = []
+    listed_external = 0
+    saw_external = False
+    errors = 0
+
+    for kind, adapter in targets:
+        if kind == "local":
+            try:
+                jobs.extend(f.poll(kind, app.args.id or None, rerun=app.args.rerun))
+            except Exception as e:  # noqa: BLE001 - keep intake resilient and explicit
+                print(f"intake error [{kind}]: {e}")
+                errors += 1
+            continue
+
+        saw_external = True
+        try:
+            items = [adapter.fetch(i) for i in app.args.id] if app.args.id else adapter.poll()
+        except Exception as e:  # noqa: BLE001 - one source failure should not crash intake
+            print(f"intake error [{kind}]: {e}")
+            errors += 1
+            continue
+
+        if not items:
+            print(f"[{kind}] no issues available")
+            continue
+
+        print(f"[{kind}] {len(items)} issue(s)")
+        for item in items:
+            listed_external += 1
+            print(_fmt_issue_item(kind, item))
+            job_id, new_job = f.submit(item, rerun=app.args.rerun)
+            if new_job:
+                print(f"  queued {job_id}")
+                jobs.append(job_id)
+            else:
+                state = f.store.job(job_id)["state"]
+                print(f"  skip   already has {job_id} ({state})")
+
+    if saw_external and listed_external == 0 and errors == 0:
+        print("no external issues found")
+
     print(f"{len(jobs)} new job(s): {', '.join(jobs) or '-'}")
-    return 0
+    return 1 if errors else 0
 
 
 def cmd_add(app: App) -> int:

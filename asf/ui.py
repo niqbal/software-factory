@@ -193,6 +193,78 @@ class Console:
                         "blocked_by": missing, "ready": not missing})
         return out
 
+    @staticmethod
+    def _fmt_issue_item(kind: str, item: Any) -> str:
+        url = item.url or "-"
+        return f"- [{kind}] #{item.external_id} {item.title} ({url})"
+
+    def pull_intake(self) -> dict[str, Any]:
+        """Pull from intake adapters and return a console-ready report.
+
+        Local-only projects keep the historical response shape for the intake button.
+        """
+        adapters_by_kind = self.f.intake_adapters()
+        jobs: list[str] = []
+        lines: list[str] = []
+        errors = 0
+        listed_external = 0
+        saw_external = False
+
+        for kind, adapter in adapters_by_kind.items():
+            if kind == "local":
+                jobs.extend(self.f.poll(kind))
+                continue
+
+            saw_external = True
+            try:
+                items = adapter.poll()
+            except Exception as e:  # noqa: BLE001 - one source failure should not crash intake
+                msg = f"intake error [{kind}]: {e}"
+                lines.append(msg)
+                self._echo(msg)
+                errors += 1
+                continue
+
+            if not items:
+                msg = f"[{kind}] no issues available"
+                lines.append(msg)
+                self._echo(msg)
+                continue
+
+            msg = f"[{kind}] {len(items)} issue(s)"
+            lines.append(msg)
+            self._echo(msg)
+            for item in items:
+                listed_external += 1
+                issue_line = self._fmt_issue_item(kind, item)
+                lines.append(issue_line)
+                self._echo(issue_line)
+                job_id, new_job = self.f.submit(item)
+                if new_job:
+                    jobs.append(job_id)
+                    queued = f"  queued {job_id}"
+                    lines.append(queued)
+                    self._echo(queued)
+                else:
+                    state = self.f.store.job(job_id)["state"]
+                    skipped = f"  skip   already has {job_id} ({state})"
+                    lines.append(skipped)
+                    self._echo(skipped)
+
+        if not saw_external:
+            # Preserve the original message when only local intake is configured.
+            return {"message": f"{len(jobs)} new job(s)", "errors": 0, "new_jobs": jobs}
+
+        if listed_external == 0 and errors == 0:
+            msg = "no external issues found"
+            lines.append(msg)
+            self._echo(msg)
+
+        summary = f"{len(jobs)} new job(s): {', '.join(jobs) or '-'}"
+        lines.append(summary)
+        self._echo(summary)
+        return {"message": "\n".join(lines), "errors": errors, "new_jobs": jobs}
+
     def job_detail(self, job_id: str) -> dict[str, Any]:
         st = self.f.store
         j = st.job(job_id)
@@ -612,7 +684,9 @@ def make_handler(portfolio: Portfolio):
                 if rest == ["worker", "stop"]:
                     return self._send(200, {"message": portfolio.scheduler.stop()})
                 if rest == ["intake"]:
-                    return self._send(200, {"message": f"{len(c.f.poll())} new job(s)"})
+                    report = c.pull_intake()
+                    return self._send(200, {"message": report["message"], "errors": report["errors"],
+                                             "new_jobs": report["new_jobs"]})
                 if rest == ["pause-all"]:
                     c.f.store.set_flag("paused_all", payload.get("reason") or "paused from the console")
                     return self._send(200, {"message": "paused"})
