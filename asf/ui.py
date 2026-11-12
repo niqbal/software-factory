@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections
 import json
+import os
 import secrets as pysecrets
 import threading
 import time
@@ -371,6 +372,64 @@ class Portfolio:
         self.stop_all = threading.Event()
         from .scheduler import Scheduler
         self.scheduler = Scheduler(self)
+        self.boot = pysecrets.token_hex(6)        # changes with every process: the page reloads on it
+        self.restart_state: dict[str, Any] | None = None
+        self._exec = os.execve                    # replaced in tests
+
+    # ------------------------------------------------------------------ restart --
+    def running_jobs(self) -> list[str]:
+        """Jobs being worked on in this process, by the scheduler or a console button."""
+        ids = {j for _, j in self.scheduler.running.values()}
+        for c in list(self.consoles.values()):
+            ids |= set(c.busy)
+        return sorted(ids)
+
+    def health(self) -> dict[str, Any]:
+        return {"boot": self.boot, "running": len(self.running_jobs()), "restart": self.restart_state}
+
+    def restart(self, now: bool = False, wait_poll: float = 2.0) -> str:
+        """Restart the console on the latest code with a fresh environment (see asf.restart).
+
+        The scheduler stops taking new jobs at once. Unless `now`, the restart waits for
+        running jobs to finish; with `now` they are cut off and carry on from their current
+        step in the new process. If the new code does not import, nothing is restarted and
+        the scheduler is started again if it was running."""
+        with self.lock:
+            if self.restart_state and self.restart_state["phase"] in ("waiting", "updating"):
+                return f"a restart is already {self.restart_state['phase']}"
+            was_running = self.scheduler.is_running()
+            self.restart_state = {"phase": "waiting", "since": time.time(), "now": now,
+                                  "message": "waiting for running jobs to finish"}
+        self.scheduler.stop()
+        threading.Thread(target=self._restart, args=(now, was_running, wait_poll), daemon=True).start()
+        busy = self.running_jobs()
+        if now or not busy:
+            return "restarting from the latest code"
+        return f"restarting after {len(busy)} running job(s) finish: {', '.join(busy)}"
+
+    def _restart(self, now: bool, was_running: bool, wait_poll: float) -> None:
+        from . import restart as rs
+        try:
+            while not now and (self.running_jobs() or self.scheduler.is_running()):
+                self.restart_state["message"] = f"waiting for {', '.join(self.running_jobs()) or 'the scheduler'}"
+                time.sleep(wait_poll)
+            self.restart_state.update(phase="updating", message="updating the checkout")
+            root = rs.code_root()
+            notes = rs.update_checkout(root)
+            problem = rs.preflight(root)
+            if problem:
+                raise RuntimeError("the new code does not import, so the console keeps running:\n" + problem)
+            env = rs.fresh_env()
+            env["ASF_RESTART_NOTES"] = "; ".join(notes)
+            if was_running:
+                env["ASF_START_SCHEDULER"] = "1"
+            cmd = rs.command()
+            print(f"restarting: {'; '.join(notes)}", flush=True)
+            self._exec(cmd[0], cmd, env)  # replaces this process; open sockets close with it
+        except Exception as e:  # noqa: BLE001 - report it on the page; the console keeps serving
+            self.restart_state = {"phase": "failed", "since": time.time(), "message": str(e)[:2000]}
+            if was_running:
+                self.scheduler.start()
 
     def projects(self) -> list[Any]:
         from .projects import discover
@@ -509,6 +568,8 @@ def make_handler(portfolio: Portfolio):
                     return self._send(200, portfolio.summary())
                 if path == "/api/scheduler":
                     return self._send(200, portfolio.scheduler.status())
+                if path == "/api/health":
+                    return self._send(200, portfolio.health())
                 if len(parts) >= 4 and parts[:2] == ["api", "p"]:
                     c = portfolio.console(parts[2])
                     if parts[3] == "state":
@@ -533,6 +594,8 @@ def make_handler(portfolio: Portfolio):
                     allowed = {k: payload[k] for k in ("name", "priority", "archived", "hidden") if k in payload}
                     set_entry(parts[2], **allowed)
                     return self._send(200, {"message": "saved"})
+                if parts == ["api", "restart"]:
+                    return self._send(200, {"message": portfolio.restart(now=bool(payload.get("now")))})
                 if parts == ["api", "scheduler", "start"]:
                     return self._send(200, {"message": portfolio.scheduler.start()})
                 if parts == ["api", "scheduler", "stop"]:
@@ -571,11 +634,23 @@ def make_handler(portfolio: Portfolio):
 
 def serve(port: int, open_project: str | None = None, open_browser: bool = False, secrets: Any = None) -> None:
     portfolio = Portfolio(secrets)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(portfolio))
+    restarted = os.environ.pop("ASF_RESTART_NOTES", None)
+    for attempt in range(20 if restarted is not None else 1):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(portfolio))
+            break
+        except OSError:
+            if attempt == (19 if restarted is not None else 0):
+                raise
+            time.sleep(0.5)  # just restarted: the old process's socket may not be gone yet
     portfolio.start_reconciler()
     url = f"http://127.0.0.1:{port}/" + (f"#p/{open_project}" if open_project else "")
     print(f"factory console: {url}  (all projects under ~/.asf; Ctrl-C to stop)", flush=True)
-    if open_browser:
+    if restarted is not None:
+        portfolio.scheduler._say(f"console restarted: {restarted or 'no notes'}")
+        if os.environ.pop("ASF_START_SCHEDULER", None):
+            portfolio.scheduler.start()
+    elif open_browser:
         import webbrowser
         webbrowser.open(url)
     try:

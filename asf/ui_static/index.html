@@ -111,6 +111,7 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
   <button id="workerBtn" class="primary">Run queue</button>
   <button id="pauseBtn" title="Kill switch: stop all agent work in this project">Pause</button>
   </span>
+  <button id="restartBtn" onclick="restartConsole()" title="Pull the latest main, then restart the console with a fresh environment (PATH, CLIs). Jobs carry on afterwards.">Restart console</button>
 </header>
 
 <div id="homeView" style="display:none">
@@ -408,6 +409,35 @@ async function tick() {
   await refresh();
   if (S) $('repo').innerHTML = `<a class="crumb" href="#">All projects</a> / ${esc(S.repo)} @ ${esc(S.default_branch)}`;
 }
+// ---- restart -----------------------------------------------------------------------------
+async function restartConsole() {
+  let h;
+  try { h = await api('/api/health'); } catch (e) { return toast('restart: ' + e.message, true); }
+  if (!confirm('Restart the console?\n\nIt pulls the latest main (when the checkout is clean), checks the new code loads, and starts again with a fresh shell environment. Nothing changes if the new code does not load.')) return;
+  let now = false;
+  if (h.running) now = confirm(`${h.running} job(s) are running.\n\nOK: restart now. They are cut off and carry on from their current step after the restart.\nCancel: stop taking new jobs and restart once they finish.`);
+  try { toast((await api('/api/restart', {now})).message); } catch (e) { return toast('restart: ' + e.message, true); }
+  watchRestart(h.boot);
+}
+function watchRestart(boot) {
+  const b = $('restartBtn');
+  b.disabled = true;
+  clearInterval(watchRestart.t);
+  watchRestart.t = setInterval(async () => {
+    let h;
+    try { h = await api('/api/health'); } catch (e) { b.textContent = 'Restarting…'; return; }
+    if (h.boot !== boot) { clearInterval(watchRestart.t); location.reload(); return; }
+    const r = h.restart;
+    if (r && r.phase === 'failed') {
+      clearInterval(watchRestart.t); b.disabled = false; b.textContent = 'Restart console';
+      toast('restart failed: ' + r.message, true); return;
+    }
+    b.textContent = r && r.phase === 'waiting' ? `Restart: ${r.message}` : 'Restarting…';
+  }, 1500);
+}
+// A restart started in another tab, or before this page loaded, is followed too.
+api('/api/health').then(h => { if (h.restart && ['waiting','updating'].includes(h.restart.phase)) watchRestart(h.boot); }).catch(() => {});
+
 window.addEventListener('hashchange', route);
 route();
 setInterval(async () => { await tick(); if (P && selected && tab !== 'revise' && !busy) loadDetail(selected); }, 4000);
