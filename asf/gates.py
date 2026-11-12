@@ -49,7 +49,7 @@ def is_code(path: str) -> bool:
 
 def added_lines(diff: str) -> str:
     return "\n".join(line[1:] for line in diff.splitlines()
-                     if line.startswith("+") and not line.startswith("+++"))
+                      if line.startswith("+") and not line.startswith("+++"))
 
 
 def _deps_from_package_json(text: str | None) -> set[str]:
@@ -104,7 +104,7 @@ class GateRunner:
                 results.append(GateResult(name, "skipped", "unknown gate"))
         for r in results:
             self.log("gate.result", {"gate": r.name, "package": r.package, "status": r.status,
-                                     "detail": r.detail})
+                                      "detail": r.detail})
         return results
 
     # -------------------------------------------------------------- static --
@@ -167,14 +167,29 @@ class GateRunner:
 
     # ------------------------------------------------------------- commands --
     def command_gate(self, kind: str, changed: list[str]) -> list[GateResult]:
+        coverage_result: GateResult | None = None
+        if kind == "test":
+            test_owners = [p for p in self.cfg.packages if "test" in p.commands]
+            uncovered_code = sorted({path for path in changed if is_code(path)
+                                     and not any(pkg.owns(path) for pkg in test_owners)})
+            if uncovered_code:
+                detail = ("changed code files are not covered by any configured test command: "
+                          f"{', '.join(uncovered_code)}")
+                if self.tier >= 1:
+                    coverage_result = GateResult("test", "fail", detail)
+                else:
+                    coverage_result = GateResult("test", "pass", f"warning: {detail}")
+
         pkgs = [p for p in self.cfg.packages if kind in p.commands and any(p.owns(c) for c in changed)]
         code_changed = any(is_code(c) for c in changed)
         if not pkgs:
+            if coverage_result:
+                return [coverage_result]
             if kind == "test" and code_changed and self.tier >= 1:
                 return [GateResult("test", "fail", "code changed but no configured test command covers "
                                                    "the changed paths")]
             return [GateResult(kind, "skipped", "no configured package command covers the changed paths")]
-        results = []
+        results = [coverage_result] if coverage_result else []
         for pkg in pkgs:
             cmd = pkg.commands[kind].replace("{args}", "").strip()
             res = self.sb.exec(cmd, cwd=pkg.root, timeout=self.timeout)
