@@ -261,7 +261,8 @@ class Console:
         f = self.f
         by = body.get("by") or "owner (ui)"
         if action == "merge":
-            self.background(f"merge {job_id}", lambda: f"{job_id} -> {f.merge_reviewed(job_id, by=by)}")
+            f.begin_review_merge(job_id, by=by)
+            self.background(f"merge {job_id}", lambda: f"{job_id} -> {self.run_guarded(job_id) or 'already running'}")
             return "merging; post-merge checks run next"
         if action == "deploy":
             ids = f.approve_deploy(job_id, by=by)
