@@ -130,14 +130,38 @@ along (verifying, reviewing) goes before new work. A usage-limit error ("You've 
 ```
 queued -> triaged -> implementing -> testing -> verifying -> reviewing -> committing -> delivering
   -> awaiting_review (a person reviews; or awaiting_approval -> merging when the agent may merge)
-  -> merged   (on the default branch: observe.post_merge commands run there, then the deploy gate)
-  -> done     (shipped: the only state that counts as output)
+  -> merged   (on the default branch: observe.post_merge commands run there)
+  -> awaiting_deploy -> deploying   (only when a deploy step matches the change)
+  -> done     (shipped: merged, verified, deployed, post-deploy gate held; the only output)
 ```
 
 The factory notices a merge however it was made, and a deleted branch counts as abandoned.
 `asf report` (and the console) count only shipped work: cost per shipped job is all spend
 divided by shipped jobs, abandoned spend is reported as waste, and lead time is split into
 agent time, review wait and post-merge verification.
+
+**Deploy.** `deploy.steps` in `factory.yaml` are what "in production" means for a project.
+After the post-merge checks pass, every step whose `when` paths the job touched runs on a
+clean worktree of the default branch tip, with the full environment plus `ASF_REPO`,
+`ASF_SHA`, `ASF_JOB`, `ASF_JOB_TITLE` and `ASF_CHANGED_PATHS`. `approval: owner` (the
+default) parks the job as **ready to deploy** with the step's `preview` output; the owner
+clicks Deploy in the console (or runs `asf deploy JOB`), and one deploy covers every job
+waiting for it. `approval: auto` deploys straight away. A failed step stops the job for a
+human; `retry` runs the deploy again. A change no step matches is done after its checks.
+
+```yaml
+deploy:
+  steps:
+  - name: publish-site
+    when: [web/**]                       # paths that need a deploy; omit to deploy every merge
+    preview: scripts/what-would-change   # shown with the approval
+    run: scripts/deploy "$ASF_SHA"
+    approval: owner                      # owner | auto
+    timeout_s: 600
+```
+
+Deploy commands run owner-written code with real credentials, so protect the scripts they
+call (`permissions.protected_paths`) as well as `factory.yaml`.
 
 **Owner review.** Paths only the owner approves (`owner_review.paths`, else every tier-3 rule)
 are pulled out at commit time with exactly their diff and the agent's `OWNER REVIEW:` notes.
@@ -156,6 +180,7 @@ writing the change.
 | `status [JOB]`, `events JOB [--jsonl]`, `report [--json]` | Job list, full audit trail of every agent tool call, metrics that count only shipped work. |
 | `ui [--port N] [--open]` | The local web console for all projects (see above); with `--repo`, it opens that project. |
 | `approve` / `reject JOB` | Human approval for tiers that require it. |
+| `deploy JOB` | Run the deploy steps for a job that is ready to deploy (and every other one waiting). |
 | `resume JOB [--extra-usd N]`, `retry JOB` | Continue a budget-paused job, or re-enter a failed one from a clean sandbox. |
 | `revise JOB --note "..." [--notes-file F] [--extra-usd N]` | Send a delivered, unmerged job back with review notes. The implementer works on top of the delivered commit on the same branch, then the tester, gates and reviewers run again over the whole change, and one new commit is added. Each revision gets a fresh budget. Follow with `run --job JOB`. |
 | `publish JOB` | Push a delivered job's branch and open a draft pull request (the report, plus `Fixes #N` for GitHub issues). Works whatever `delivery.provider` is; later revisions of the job update the same PR. |

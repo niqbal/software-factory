@@ -88,6 +88,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "delivery": {"provider": "local_git", "branch_prefix": "factory/", "draft": True},
     "observe": {"provider": "none"},
+    "deploy": {"steps": []},
     "permissions": {
         "protected_paths": [".github/**", ".gitlab-ci.yml", ".circleci/**", "factory.yaml",
                             "**/.env", "**/.env.*", "**/*.pem", "**/*.key"],
@@ -208,6 +209,16 @@ def validate(raw: dict[str, Any]) -> list[str]:
     for rule in raw.get("tiers", {}).get("rules", []):
         if rule.get("tier") not in (0, 1, 2, 3) or not rule.get("paths"):
             errors.append(f"tier rule needs paths and tier 0-3: {rule}")
+    seen = set()
+    for i, step in enumerate((raw.get("deploy") or {}).get("steps") or []):
+        if not isinstance(step, dict) or not step.get("name") or not step.get("run"):
+            errors.append(f"deploy.steps[{i}] needs a name and a run command")
+            continue
+        if step["name"] in seen:
+            errors.append(f"duplicate deploy step {step['name']}")
+        seen.add(step["name"])
+        if step.get("approval", "owner") not in ("owner", "auto"):
+            errors.append(f"deploy step {step['name']}: approval must be owner | auto")
     mmt = raw.get("autonomy", {}).get("max_merge_tier", -1)
     if not isinstance(mmt, int) or mmt < -1 or mmt > 3:
         errors.append("autonomy.max_merge_tier must be -1..3")

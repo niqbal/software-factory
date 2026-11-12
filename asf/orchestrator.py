@@ -7,6 +7,7 @@ stopped with `asf run --job <id>`.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import time
@@ -179,6 +180,8 @@ class Factory:
         if job["state"] not in ("failed", "needs_human"):
             raise ValueError(f"{job_id} is {job['state']}; only failed or needs_human jobs can be retried")
         target = job["data"].get("failed_state") or ("implementing" if job["data"].get("sandbox") else "queued")
+        if target == "deploying":
+            self.__dict__.pop("_deploy_cache", None)  # run the deploy again, not its cached failure
         if target == "implementing" and job["data"].get("sandbox"):
             # A fresh attempt starts from the base commit, not from a half-finished one. During a
             # revision the base is the delivered commit: the work already on the branch is kept.
@@ -649,7 +652,8 @@ class Factory:
     def _waiting_settled(self, job: dict[str, Any]) -> bool:
         """True when a waiting job's condition resolved (its state has changed)."""
         return {"awaiting_approval": self._approvals_settled,
-                "awaiting_review": self._review_settled}[job["state"]](job)
+                "awaiting_review": self._review_settled,
+                "awaiting_deploy": lambda j: False}[job["state"]](job)
 
     def _branch_status(self, branch: str | None) -> str:
         """'merged', 'open' or 'gone' for a branch relative to the default branch."""
@@ -720,14 +724,136 @@ class Factory:
             return self._needs_human(job, f"post-merge check failed on {self.cfg.default_branch}: "
                                           f"{failure[:600]}")
         self.store.update_job(job["id"], post_merge={"status": "pass"})
+        steps = self.deploy_steps(job)
+        if not steps:
+            return self._ship(job)
+        names = [st["name"] for st in steps]
+        if any(st.get("approval", "owner") == "owner" for st in steps):
+            tip = git(self.repo, "rev-parse", self.cfg.default_branch).strip()
+            preview = self._deploy_preview(steps, job, tip)
+            self.store.update_job(job["id"], "awaiting_deploy",
+                                  deploy={"steps": names, "status": "awaiting", "sha": tip, "preview": preview})
+            self.notify("awaiting_deploy", self.store.job(job["id"]),
+                        f"merged and verified; ready to deploy ({', '.join(names)})")
+            return
+        self.store.update_job(job["id"], "deploying", deploy={"steps": names, "status": "auto"})
+
+    def _ship(self, job: dict[str, Any]) -> None:
+        """Post-deploy gate, then done."""
+        job = self.store.job(job["id"])
         result: GateResult = self.observe.check(job, job["data"].get("merged_at", time.time()))
         self.store.update_job(job["id"], post_deploy=result.__dict__)
         if result.status == "fail":
             return self._needs_human(job, f"post-deploy gate failed: {result.detail}")
+        deployed = " deployed," if job["data"].get("deploy", {}).get("status") == "pass" else ""
         self.store.update_job(job["id"], "done", outcome="shipped", done_at=time.time())
-        self._finish(job, f"shipped: merged, post-merge checks pass, post-deploy {result.status}")
+        self._finish(job, f"shipped: merged, post-merge checks pass,{deployed} post-deploy {result.status}")
 
     _s_observing = _s_merged  # jobs saved before the rename
+
+    # ------------------------------------------------------------------ deploy --
+    def _job_paths(self, job: dict[str, Any]) -> list[str] | None:
+        """Files the job changed, from its base commit to its last commit (None if unknown)."""
+        base = (job["data"].get("sandbox") or {}).get("base_sha")
+        commit = job["data"].get("commit")
+        if not base or not commit:
+            return None
+        out = run(["git", "-C", str(self.repo), "diff", "--name-only", base, commit], shell=False)
+        return [f for f in out.stdout.splitlines() if f] if out.ok else None
+
+    def deploy_steps(self, job: dict[str, Any]) -> list[dict[str, Any]]:
+        """The deploy steps this job triggers: every step whose `when` paths it touched
+        (a step without `when` always runs; unknown paths count as touching everything)."""
+        changed = self._job_paths(job)
+        steps = []
+        for st in self.cfg.get("deploy.steps") or []:
+            when = st.get("when")
+            if when and changed is not None and not any(any_match(f, when) for f in changed):
+                continue
+            steps.append(st)
+        return steps
+
+    def _deploy_env(self, job: dict[str, Any], tip: str) -> dict[str, str]:
+        # Deploy commands are written by the owner in factory.yaml (agents cannot edit it), and
+        # they need real credentials (git push, cloud CLIs), so they get the full environment.
+        env = {**os.environ, **{k: str(v) for k, v in (self.cfg.get("execution.env") or {}).items()}}
+        env.update({"ASF_REPO": str(self.repo), "ASF_SHA": tip, "ASF_JOB": job["id"],
+                    "ASF_JOB_TITLE": self._item(job).title,
+                    "ASF_CHANGED_PATHS": "\n".join(self._job_paths(job) or [])})
+        return env
+
+    def _in_main_worktree(self, tip: str, fn: Callable[[Path], Any]) -> Any:
+        tmp = Path(tempfile.mkdtemp(prefix="asf-deploy-"))
+        wt = tmp / "main"
+        git(self.repo, "worktree", "add", "--detach", "-q", str(wt), tip)
+        try:
+            return fn(wt)
+        finally:
+            run(["git", "-C", str(self.repo), "worktree", "remove", "--force", str(wt)], shell=False)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _deploy_preview(self, steps: list[dict[str, Any]], job: dict[str, Any], tip: str) -> str:
+        """Output of each step's `preview` command (what would go live), for the approval."""
+        cmds = [(st["name"], st["preview"]) for st in steps if st.get("preview")]
+        if not cmds:
+            return ""
+
+        def go(wt: Path) -> str:
+            parts = []
+            for name, cmd in cmds:
+                res = run(cmd, cwd=wt, timeout=int(self.cfg.get("execution.command_timeout_s", 900)),
+                          env=self._deploy_env(job, tip))
+                parts.append(f"## {name}" + ("" if res.ok else f" (preview exited {res.code})") +
+                             f"\n{res.tail(3000)}")
+            return "\n\n".join(parts)
+        return self._in_main_worktree(tip, go)
+
+    def approve_deploy(self, job_id: str, by: str = "owner") -> list[str]:
+        """The owner's go-ahead. One deploy of the default branch covers every job waiting for
+        it, so they are all approved together; returns their ids."""
+        job = self.store.job(job_id)
+        if job["state"] != "awaiting_deploy":
+            raise ValueError(f"{job_id} is {job['state']}; only jobs awaiting deploy can be deployed")
+        ids = [j["id"] for j in self.store.jobs(["awaiting_deploy"])]
+        for jid in ids:
+            d = self.store.job(jid)["data"].get("deploy") or {}
+            self.store.update_job(jid, "deploying", deploy={**d, "status": "approved", "approved_by": by,
+                                                            "approved_at": time.time()})
+            self.store.event(jid, "deploy.approved", "human", {"by": by, "with": ids})
+        return ids
+
+    def _s_awaiting_deploy(self, job: dict[str, Any]) -> None:
+        return None  # the owner approves with approve_deploy
+
+    def _s_deploying(self, job: dict[str, Any]) -> None:
+        """Run the job's deploy steps on the default branch tip. Jobs deployed by the same run
+        share its result, so a batch deploys once."""
+        tip = git(self.repo, "rev-parse", self.cfg.default_branch).strip()
+        cache = self.__dict__.setdefault("_deploy_cache", {})
+        results = []
+        for st in self.deploy_steps(job):
+            key = (tip, st["name"])
+            if key not in cache:
+                self.echo(f"[{job['id']}] deploy step {st['name']} at {tip[:10]}")
+                cache[key] = self._in_main_worktree(tip, lambda wt, st=st: self._run_step(st, job, tip, wt))
+            results.append(cache[key])
+            if cache[key]["status"] == "fail":
+                d = job["data"].get("deploy") or {}
+                self.store.update_job(job["id"], deploy={**d, "status": "fail", "sha": tip, "results": results},
+                                      failed_state="deploying")
+                return self._needs_human(job, f"deploy step {st['name']} failed:\n{cache[key]['output'][-600:]}")
+        d = job["data"].get("deploy") or {}
+        self.store.update_job(job["id"], deploy={**d, "status": "pass", "sha": tip, "results": results,
+                                                 "deployed_at": time.time()})
+        self._ship(job)
+
+    def _run_step(self, st: dict[str, Any], job: dict[str, Any], tip: str, wt: Path) -> dict[str, Any]:
+        started = time.time()
+        res = run(st["run"], cwd=wt, timeout=int(st.get("timeout_s", 1800)), env=self._deploy_env(job, tip))
+        self.store.event(job["id"], "deploy.step", "factory",
+                         {"step": st["name"], "ok": res.ok, "sha": tip, "output": res.tail(4000)})
+        return {"name": st["name"], "status": "pass" if res.ok else "fail", "sha": tip,
+                "seconds": round(time.time() - started, 1), "output": res.tail(4000)}
 
     def _post_merge_checks(self) -> str:
         """Run observe.post_merge commands on the default branch tip in a throwaway worktree.

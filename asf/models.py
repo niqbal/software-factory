@@ -51,14 +51,16 @@ STATES = [
     "awaiting_review",    # delivered; a human reviews and merges (or the agent does, by policy)
     "awaiting_approval",  # only when the agent is allowed to merge after approval
     "merging",
-    "merged",             # on the default branch; post-merge checks and post-deploy gate run here
-    "done",               # merged AND verified after merge: the only state that counts as shipped
+    "merged",             # on the default branch; post-merge checks run here
+    "awaiting_deploy",    # checks passed; a deploy step waits for the owner's go-ahead
+    "deploying",          # deploy steps run on the default branch, then the post-deploy gate
+    "done",               # merged, verified, deployed: the only state that counts as shipped
 ]
 TERMINAL = {"done", "failed", "rejected", "needs_human"}
 # Waiting on something outside the factory: run_job returns, and a later run re-checks.
-WAITING = {"awaiting_review", "awaiting_approval"}
+WAITING = {"awaiting_review", "awaiting_approval", "awaiting_deploy"}
 # Delivered and not yet shipped.
-DELIVERED = {"awaiting_review", "awaiting_approval", "merging", "merged"}
+DELIVERED = {"awaiting_review", "awaiting_approval", "merging", "merged", "awaiting_deploy", "deploying"}
 HALTED = {"paused"}
 
 

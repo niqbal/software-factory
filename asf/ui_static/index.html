@@ -154,13 +154,14 @@ const STATE = {
   awaiting_review:['Ready to review','info'], awaiting_approval:['Needs approval','info'],
   needs_human:['Stopped: needs you','bad'], failed:['Failed','bad'], paused:['Paused','warn'],
   done:['Shipped','ok'], rejected:['Abandoned',''], merged:['Merged: verifying','violet'], observing:['Merged: verifying','violet'],
+  awaiting_deploy:['Ready to deploy','info'], deploying:['Deploying','violet'],
   merging:['Merging','violet'], queued:['Queued',''], triaged:['Triaged',''], implementing:['Implementing','info'],
   testing:['Testing','info'], verifying:['Running gates','info'], reviewing:['Reviewing','info'],
   committing:['Committing','info'], delivering:['Delivering','info'],
 };
 const name = (item, title) => (title || '').startsWith(item) ? title : `${item} · ${title}`;
 const chip = (s) => { const [l,c] = STATE[s] || [s,'']; return `<span class="chip ${c}">${esc(l)}</span>`; };
-const NEEDS = new Set(['awaiting_review','awaiting_approval','needs_human','failed','paused']);
+const NEEDS = new Set(['awaiting_review','awaiting_approval','awaiting_deploy','needs_human','failed','paused']);
 const HIST = new Set(['done','rejected']);
 
 async function api(path, body) {
@@ -195,6 +196,7 @@ function tiles(m) {
 
 function jobRow(j) {
   const why = j.state === 'awaiting_review' ? (j.owner_review ? 'Touches owner-only code: review those lines' : 'Delivered: review and merge')
+    : j.state === 'awaiting_deploy' ? 'Merged and verified: deploy when ready'
     : j.reason || (j.running ? 'running now' : '');
   return `<div class="row ${selected===j.id?'sel':''}" onclick="select('${j.id}')">
     <div class="t">${esc(name(j.item, j.title))}</div><div>${chip(j.state)}</div>
@@ -242,6 +244,7 @@ async function loadDetail(id) {
 
 const ACTION = {
   merge:   ['Merge to ' , 'primary', 'Merges the branch, then runs the post-merge checks. The job is done only when they pass.'],
+  deploy:  ['Deploy now', 'primary', 'Runs the deploy steps on the default branch. One deploy covers every job waiting for it.'],
   approve: ['Approve', 'primary', 'Records your approval; the factory merges and verifies.'],
   revise:  ['Send back with notes', '', 'The implementer works on top of this branch to address your notes.'],
   resume:  ['Resume', 'primary', 'Continues where it paused, with more time.'],
@@ -256,6 +259,7 @@ async function doAction(a) {
   if (a === 'rerun' && !confirm('Cancel this job and start the work item over from the current default branch?')) return;
   if (a === 'revise') { const n = $('reviseNotes') && $('reviseNotes').value.trim(); if (!n) { tab = 'revise'; renderDetail(); return; } body.notes = n; }
   if (a === 'merge' && !confirm('Merge this branch into ' + S.default_branch + ' now?')) return;
+  if (a === 'deploy' && !confirm('Deploy ' + S.default_branch + ' now? This runs: ' + (D.data.deploy?.steps || []).join(', '))) return;
   await post(pa(`/jobs/${D.id}/${a}`), body, a);
 }
 
@@ -292,6 +296,9 @@ function overview() {
   if (o && (o.files?.length || o.notes)) parts.push(`<div class="sec"><div class="callout violet"><b>Owner review: the lines only you can approve</b>${o.notes ? '\n' + esc(o.notes) : ''}${o.files?.length ? '\nFiles: ' + o.files.map(esc).join(', ') : ''}</div>${renderDiff(o.diff)}</div>`);
   if (d.feedback) parts.push(`<div class="sec"><h4>Reviewer findings</h4><pre>${esc(d.feedback)}</pre></div>`);
   if (d.manual_verification?.length) parts.push(`<div class="sec"><h4>Manual checks the factory asks you to do</h4><ul>${d.manual_verification.map(m => `<li>${esc(m)}</li>`).join('')}</ul></div>`);
+  const dp = d.deploy;
+  if (D.state === 'awaiting_deploy' && dp) parts.push(`<div class="callout ok"><b>Merged and verified, not live yet.</b> Deploying runs ${esc((dp.steps||[]).join(', '))} on ${esc(S.default_branch)} (${esc((dp.sha||'').slice(0,10))} when checked). The job is done once the deploy passes.</div>${dp.preview ? `<div class="sec"><h4>What would go live</h4><pre>${esc(dp.preview)}</pre></div>` : ''}`);
+  if (dp && dp.results?.length) parts.push(`<div class="sec"><h4>Deploy</h4>${dp.results.map(r => `<p><span class="chip ${r.status==='pass'?'ok':'bad'}">${esc(r.status)}</span> <b>${esc(r.name)}</b> at ${esc((r.sha||'').slice(0,10))}, ${esc(r.seconds)} s${dp.approved_by ? ' · approved by ' + esc(dp.approved_by) : ''}</p><pre>${esc(r.output)}</pre>`).join('')}</div>`);
   if (d.post_merge) parts.push(`<div class="sec"><h4>Post-merge checks</h4><span class="chip ${d.post_merge.status==='pass'?'ok':'bad'}">${esc(d.post_merge.status)}</span>${d.post_merge.detail ? `<pre style="margin-top:6px">${esc(d.post_merge.detail)}</pre>` : ''}</div>`);
   if (d.gates?.length) parts.push(`<div class="sec"><h4>Gates</h4><table>${d.gates.map(g => `<tr><td>${esc(g.name)}</td><td>${chip(g.status==='pass'?'done':g.status==='fail'?'failed':'queued').replace(/>[^<]+</, '>' + esc(g.status) + '<')}</td><td>${esc(g.detail)}</td></tr>`).join('')}</table></div>`);
   const rv = d.reviews || {};

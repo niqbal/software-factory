@@ -70,6 +70,7 @@ Detection is a starting point. Go through this list; the examples show each item
 | `context.instruction_files` names the agents' instructions | Read before every job | `AGENTS.md`, `CLAUDE.md` |
 | `limits.max_changed_lines` fits the kind of work | Content and tests make long diffs | gamedev: 2,500 at tier 2 |
 | `observe.post_merge` runs the full suite | A job is done only when main still passes after the merge | `make ci`, every game's tests |
+| `deploy.steps` say what "live" means, if anything | A job is done only after its deploy passes | gamedev: publish the site, owner approval |
 | `autonomy` stays `shadow: true, max_merge_tier: -1` at first | Nothing merges until you merge it | Raise it later, per tier, once the work looks right |
 
 Then make it official, either way:
@@ -125,19 +126,25 @@ The scheduler picks up new items every minute. Its mode decides how projects sha
 agents: **priority** finishes the lowest priority number first, **combined** takes turns,
 **separate** runs each project independently. Change a project's priority on its card.
 
-## 7. Review and merge
+## 7. Review, merge and deploy
 
 Delivered jobs land in the console inbox as a branch with a report. Tier-3 changes show the
 owner-only part as its own diff, with the agent's `OWNER REVIEW:` notes. Merge, send back
 with notes, or reject from the job page. After a merge the factory runs `observe.post_merge`
-on main; only then is the job **done**. See the main README for job states.
+on main. If a deploy step matches the change, the job comes back to the inbox as **ready to
+deploy** with the step's preview; click Deploy (or `asf deploy JOB`). Only then is the job
+**done**. See the main README for job states and the `deploy:` format.
+
+Projects without deploy steps (a library, the workflow engine) are done once main passes.
 
 ## Project notes
 
 - **gamedev**: changes are judged by playing them, so nothing merges by itself. Playtest
-  the branch (or ask the playtester agent in a Claude session) before merging. Publishing
-  stays manual: `tools/release-check.sh`, then `tools/update-published-site.sh`. Skyracer
-  (Unity) has no command-line tests and is owner-only.
+  the branch (or ask the playtester agent in a Claude session) before merging. A merged change
+  to a game's `src/` waits as ready to deploy with the release check's report; Deploy runs the
+  release check, `tools/update-published-site.sh` and `tools/publish-site.sh` (commit and
+  push `published_site/`, which Amplify serves) from a clean copy of main. Skyracer (Unity)
+  has no command-line tests, its build is not in git, and the published copy is kept.
 - **software-factory**: the factory works on itself. Its trust boundary is tier 3 and the
   tests that prove it are protected. Sandboxes import their own copy of `asf`, so a job never
   changes the running factory; a merge does, so restart `asf ui` after merging.

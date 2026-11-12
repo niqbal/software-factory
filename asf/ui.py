@@ -61,7 +61,7 @@ class Console:
         """Notice merges done outside the factory and verify them, without anyone clicking."""
         def loop() -> None:
             while not self.stop_all.is_set():
-                for job in self.f.store.jobs(["awaiting_review", "merged", "observing"]):
+                for job in self.f.store.jobs(["awaiting_review", "merged", "observing", "deploying"]):
                     try:
                         if job["state"] == "awaiting_review" and not self.f._review_settled(job):
                             continue
@@ -210,7 +210,7 @@ class Console:
         events = [{"at": e["ts"], "type": e["type"],
                    "actor": e["actor"], "summary": _summarize(e)} for e in st.events(job_id)][-120:]
         keep = ("needs_human_reason", "paused_reason", "error", "feedback", "manual_verification", "gates",
-                "reviews", "owner_review", "delivery", "post_merge", "post_deploy", "acceptance",
+                "reviews", "owner_review", "delivery", "post_merge", "deploy", "post_deploy", "acceptance",
                 "acceptance_met", "implementer", "tester", "branch", "delivered_at", "merged_at", "done_at",
                 "merged_by", "outcome", "triage")
         return {"id": job_id, "item": item[0], "title": item[1], "state": j["state"], "tier": j["tier"],
@@ -244,6 +244,8 @@ class Console:
             acts += ["merge", "revise", "reject"]
         if s == "awaiting_approval":
             acts += ["approve", "reject"]
+        if s == "awaiting_deploy":
+            acts += ["deploy"]
         if s == "paused":
             acts += ["resume", "reject"]
         if s in ("needs_human", "failed"):
@@ -261,6 +263,13 @@ class Console:
         if action == "merge":
             self.background(f"merge {job_id}", lambda: f"{job_id} -> {f.merge_reviewed(job_id, by=by)}")
             return "merging; post-merge checks run next"
+        if action == "deploy":
+            ids = f.approve_deploy(job_id, by=by)
+
+            def deploy_all() -> str:
+                return ", ".join(f"{i} -> {self.run_guarded(i)}" for i in ids)
+            self.background(f"deploy {', '.join(ids)}", deploy_all)
+            return f"deploying {len(ids)} job(s): {', '.join(ids)}"
         if action == "approve":
             f.store.approve(job_id, by, "approve", body.get("reason", ""))
             self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
@@ -324,6 +333,8 @@ def current_reason(state: str, d: dict[str, Any]) -> str:
         return d.get("outcome") or d.get("needs_human_reason") or ""
     if state == "done":
         return d.get("outcome") or ""
+    if state == "awaiting_deploy":
+        return "ready to deploy: " + ", ".join((d.get("deploy") or {}).get("steps") or [])
     return ""
 
 
@@ -460,7 +471,7 @@ class Portfolio:
                         c = self.console(p.key)
                     except Exception:  # noqa: BLE001
                         continue
-                    for job in c.f.store.jobs(["awaiting_review", "merged", "observing"]):
+                    for job in c.f.store.jobs(["awaiting_review", "merged", "observing", "deploying"]):
                         try:
                             if job["state"] == "awaiting_review" and not c.f._review_settled(job):
                                 continue
@@ -472,7 +483,7 @@ class Portfolio:
         threading.Thread(target=loop, daemon=True).start()
 
 
-NEEDS_YOU = {"awaiting_review", "awaiting_approval", "needs_human", "failed", "paused"}
+NEEDS_YOU = {"awaiting_review", "awaiting_approval", "awaiting_deploy", "needs_human", "failed", "paused"}
 
 
 def make_handler(portfolio: Portfolio):

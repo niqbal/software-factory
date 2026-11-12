@@ -68,3 +68,74 @@ def test_owner_notes_are_extracted():
     s = "Fixed rounding.\nOWNER REVIEW:\n- server.go: added TokenKey to Config (needed for signing)\n"
     assert owner_notes(s).startswith("- server.go: added TokenKey")
     assert owner_notes("no special changes") == ""
+
+
+# ---- deploy: merged and verified is not live until the deploy steps pass ----------------
+
+def _deploy_cfg(tmp_path, **step):
+    log = tmp_path / "deploy.log"
+    base = {"name": "publish", "run": f'echo "$ASF_JOB $ASF_SHA $(basename $PWD)" >> {log}',
+            "preview": "echo would publish $ASF_CHANGED_PATHS"}
+    return {"deploy.steps": [{**base, **step}]}, log
+
+
+def test_owner_approved_deploy(invoice_repo, state, store, tmp_path):
+    cfg, log = _deploy_cfg(tmp_path)
+    f, job_id = delivered(invoice_repo, state, store, **cfg)
+    assert f.merge_reviewed(job_id, by="owner") == "awaiting_deploy"
+    d = store.job(job_id)["data"]["deploy"]
+    assert d["steps"] == ["publish"] and "would publish invoice/" in d["preview"]
+    assert f.run_job(job_id) == "awaiting_deploy" and not log.exists()  # waits for the owner
+    assert f.approve_deploy(job_id, by="owner") == [job_id]
+    assert f.run_job(job_id) == "done"
+    tip = sh(invoice_repo, "git", "rev-parse", "main").strip()
+    assert log.read_text().split() == [job_id, tip, "main"]  # ran on a clean worktree of main's tip
+    d = store.job(job_id)["data"]
+    assert d["deploy"]["status"] == "pass" and d["deploy"]["approved_by"] == "owner"
+    assert "deployed" in d["outcome"] or d["outcome"] == "shipped"
+
+
+def test_auto_deploy(invoice_repo, state, store, tmp_path):
+    cfg, log = _deploy_cfg(tmp_path, approval="auto")
+    f, job_id = delivered(invoice_repo, state, store, **cfg)
+    assert f.merge_reviewed(job_id, by="owner") == "done" and log.exists()
+
+
+def test_no_deploy_when_the_change_misses_its_paths(invoice_repo, state, store, tmp_path):
+    cfg, log = _deploy_cfg(tmp_path, when=["web/**"])
+    f, job_id = delivered(invoice_repo, state, store, **cfg)
+    assert f.merge_reviewed(job_id, by="owner") == "done"  # nothing to deploy for this change
+    assert not log.exists() and "deploy" not in store.job(job_id)["data"]
+
+
+def test_failed_deploy_stops_and_retries(invoice_repo, state, store, tmp_path):
+    flag = tmp_path / "ok"
+    cfg, _ = _deploy_cfg(tmp_path, approval="auto", run=f"test -f {flag}")
+    f, job_id = delivered(invoice_repo, state, store, **cfg)
+    assert f.merge_reviewed(job_id, by="owner") == "needs_human"
+    job = store.job(job_id)
+    assert "deploy step publish failed" in job["data"]["needs_human_reason"]
+    flag.write_text("")
+    assert f.retry(job_id) == "deploying"
+    assert f.run_job(job_id) == "done"
+
+
+def test_one_deploy_covers_every_waiting_job(invoice_repo, state, store, tmp_path):
+    cfg, log = _deploy_cfg(tmp_path)
+    f, first = delivered(invoice_repo, state, store, **cfg)
+    assert f.merge_reviewed(first, by="owner") == "awaiting_deploy"
+    second, _ = f.submit(item(title="Another issue entirely"))
+    d = store.job(first)["data"]  # a second merged job waiting for the same deploy
+    store.update_job(second, "awaiting_deploy", sandbox=d["sandbox"], commit=d["commit"], deploy=d["deploy"])
+    assert sorted(f.approve_deploy(second)) == sorted([first, second])
+    assert f.run_job(first) == "done" and f.run_job(second) == "done"
+    assert len(log.read_text().splitlines()) == 1  # main was deployed once
+
+
+def test_deploy_config_is_validated():
+    import pytest
+    from asf import config as config_mod
+    with pytest.raises(config_mod.ConfigError):
+        config_mod.load(text="version: 1\ndeploy: {steps: [{name: x}]}\n")
+    with pytest.raises(config_mod.ConfigError):
+        config_mod.load(text="version: 1\ndeploy: {steps: [{name: x, run: y, approval: maybe}]}\n")

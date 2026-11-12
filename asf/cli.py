@@ -178,6 +178,9 @@ def cmd_doctor(app: App) -> int:
         from .adapters.models.claude_code import find_binary
         b = find_binary(cfg.get("models") or {})
         check(bool(b), f"Claude Code CLI at {b}", "Claude Code CLI not found: set models.binary or ASF_CLAUDE_BIN")
+    for st in cfg.get("deploy.steps") or []:
+        when = ", ".join(st.get("when") or []) or "every merge"
+        print(f"  info  deploy {st['name']}: {st.get('approval', 'owner')} approval, when {when}")
     print(f"  info  shadow mode {'on' if cfg.get('autonomy.shadow') else 'off'}, max merge tier "
           f"{cfg.get('autonomy.max_merge_tier')}, monthly cap ${cfg.get('budgets.monthly_cap_usd')}")
     if ok:
@@ -280,6 +283,13 @@ def cmd_report(app: App) -> int:
 def cmd_approve(app: App, decision: str) -> int:
     app.store.approve(app.args.job, app.args.by or os.environ.get("USER", "human"), decision, app.args.reason or "")
     print(f"{decision} recorded for {app.args.job}")
+    return 0
+
+
+def cmd_deploy(app: App) -> int:
+    ids = app.factory.approve_deploy(app.args.job, by=app.args.by or os.environ.get("USER", "owner"))
+    for jid in ids:
+        print(f"{jid} -> {app.factory.run_job(jid)}")
     return 0
 
 
@@ -432,6 +442,9 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("job")
         s.add_argument("--by")
         s.add_argument("--reason")
+    s = sub.add_parser("deploy", help="run the deploy steps for a job awaiting deploy (and every other one)")
+    s.add_argument("job")
+    s.add_argument("--by")
     s = sub.add_parser("resume")
     s.add_argument("job")
     s.add_argument("--extra-usd", type=float, default=0.0)
@@ -470,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
         "status": cmd_status, "events": cmd_events, "report": cmd_report, "ui": cmd_ui,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
-        "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "publish": cmd_publish,
+        "deploy": cmd_deploy, "resume": cmd_resume, "retry": cmd_retry, "revise": cmd_revise, "publish": cmd_publish,
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
         "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters,

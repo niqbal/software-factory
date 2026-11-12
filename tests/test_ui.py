@@ -124,3 +124,26 @@ def test_portfolio_reloads_an_edited_factory_yaml(tmp_path, monkeypatch):
     first.busy.clear()
     second = portfolio.console(p.key)
     assert second is not first and second.cfg_stamp == 1
+
+
+def test_console_deploy_button(invoice_repo, state, store, tmp_path):
+    log = tmp_path / "deployed"
+    f = factory(invoice_repo, state, store, provider(),
+                **{"deploy.steps": [{"name": "publish", "run": f"touch {log}", "preview": "echo site diff"}]})
+    job_id, _ = f.submit(item())
+    assert f.run_job(job_id) == "awaiting_review"
+    assert f.merge_reviewed(job_id, by="owner") == "awaiting_deploy"
+    console, server, base = start(f)
+    try:
+        pf = get(base + "/api/portfolio")
+        assert [i["id"] for i in pf["inbox"]] == [job_id] and "ready to deploy: publish" in pf["inbox"][0]["reason"]
+        detail = get(f"{base}/api/p/{KEY}/jobs/{job_id}")
+        assert detail["actions"] == ["deploy"] and "site diff" in detail["data"]["deploy"]["preview"]
+        assert "deploying 1 job" in post(f"{base}/api/p/{KEY}/jobs/{job_id}/deploy", console.token)["message"]
+        for _ in range(100):
+            if store.job(job_id)["state"] == "done":
+                break
+            time.sleep(0.1)
+        assert store.job(job_id)["state"] == "done" and log.exists()
+    finally:
+        server.shutdown()

@@ -14,8 +14,8 @@ from .store import Store
 
 BUCKETS = {
     "shipped": {"done"},
-    "verifying": {"merged", "observing", "merging"},
-    "awaiting_review": {"awaiting_review", "awaiting_approval"},
+    "verifying": {"merged", "observing", "merging", "deploying"},
+    "awaiting_review": {"awaiting_review", "awaiting_approval", "awaiting_deploy"},
     "in_progress": {"queued", "triaged", "implementing", "testing", "verifying", "reviewing",
                     "committing", "delivering"},
     "stopped": {"needs_human", "failed", "paused"},
