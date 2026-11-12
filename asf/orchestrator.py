@@ -803,15 +803,17 @@ class Factory:
             return True
         return False
 
-    def merge_reviewed(self, job_id: str, by: str = "human") -> str:
-        """A human approves a delivered job: merge it now, then verify the merge."""
+    def begin_review_merge(self, job_id: str, by: str = "human") -> None:
+        """Move a reviewed job into merge execution so the UI can show immediate progress."""
         job = self.store.job(job_id)
         if job["state"] != "awaiting_review":
             raise ValueError(f"{job_id} is {job['state']}; only jobs awaiting review can be merged")
-        merged = self._delivery_for(job).merge(job, job["data"].get("delivery", {}))
-        self.store.approve(job_id, by, "approve", "merged from review")
-        self.store.update_job(job_id, "merged", merged=merged, merged_at=time.time(), merged_by=by)
-        self.store.event(job_id, "job.merged", "human", {"by": by})
+        self.store.update_job(job_id, "merging", merge_requested_by=by)
+        self.store.event(job_id, "job.merge_requested", "human", {"by": by})
+
+    def merge_reviewed(self, job_id: str, by: str = "human") -> str:
+        """A human approves a delivered job: merge it now, then verify the merge."""
+        self.begin_review_merge(job_id, by=by)
         return self.run_job(job_id)
 
     def reject_job(self, job_id: str, by: str = "human", reason: str = "") -> None:
@@ -824,8 +826,13 @@ class Factory:
         self.store.event(job_id, "job.rejected", "human", {"by": by, "reason": reason})
 
     def _s_merging(self, job: dict[str, Any]) -> None:
-        merged = self.delivery.merge(job, job["data"].get("delivery", {}))
-        self.store.update_job(job["id"], "merged", merged=merged, merged_at=time.time(), merged_by="agent")
+        by = job["data"].get("merge_requested_by")
+        merged = self._delivery_for(job).merge(job, job["data"].get("delivery", {}))
+        if by:
+            self.store.approve(job["id"], by, "approve", "merged from review")
+        self.store.update_job(job["id"], "merged", merged=merged, merged_at=time.time(),
+                              merged_by=by or "agent", merge_requested_by="")
+        self.store.event(job["id"], "job.merged", "human" if by else "factory", {"by": by or "agent"})
 
     def _s_merged(self, job: dict[str, Any]) -> None:
         """Merged is not done: the default branch must still pass, and the deploy gate must hold."""
