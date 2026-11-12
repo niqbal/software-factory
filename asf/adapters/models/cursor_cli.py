@@ -26,11 +26,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 from typing import Any
 
+from ...util import find_cli
 from ..base import AdapterContext, Conversation, ModelProvider, ModelTurn, ToolCall, ToolSpec
 
 PREAMBLE = """You are an agent controlled by a host program (a software factory).
@@ -71,8 +71,7 @@ class CursorError(RuntimeError):
 
 
 def find_binary(settings: dict[str, Any]) -> str | None:
-    cand = settings.get("binary") or os.environ.get("ASF_CURSOR_BIN") or shutil.which("cursor-agent")
-    return cand if cand and os.path.isfile(cand) and os.access(cand, os.X_OK) else None
+    return find_cli("cursor-agent", settings.get("binary"), "ASF_CURSOR_BIN")
 
 
 def extract_json(text: str, require: str | None = None) -> dict[str, Any] | None:

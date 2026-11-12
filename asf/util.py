@@ -113,6 +113,30 @@ def sandbox_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+# Where CLI installers put binaries that a shell's PATH may not include (a console started
+# from a terminal without ~/.local/bin on PATH could not find claude or cursor-agent).
+CLI_DIRS = ("~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin")
+
+
+def find_cli(name: str, explicit: str | None = None, env_var: str | None = None) -> str | None:
+    """An executable CLI: the configured path, then $env_var, then PATH, then CLI_DIRS."""
+    def usable(p: str | None) -> bool:
+        return bool(p) and os.path.isfile(p) and os.access(p, os.X_OK)  # type: ignore[arg-type]
+
+    for cand in (explicit, os.environ.get(env_var) if env_var else None):
+        if cand:
+            return cand if usable(cand) else None  # a path set on purpose is not second-guessed
+    import shutil
+    found = shutil.which(name)
+    if usable(found):
+        return found
+    for d in CLI_DIRS:
+        cand = os.path.join(os.path.expanduser(d), name)
+        if usable(cand):
+            return cand
+    return None
+
+
 def run(cmd: str | list[str], cwd: str | Path | None = None, timeout: float = 600,
         env: dict[str, str] | None = None, shell: bool | None = None) -> ExecResult:
     start = now()

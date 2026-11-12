@@ -120,3 +120,25 @@ def test_pool_routes_by_role_and_fails_over(tmp_path, monkeypatch):
     limits.record_limit("claude", datetime.now().astimezone() + timedelta(hours=1), "limit")
     with pytest.raises(AllBackendsLimited):
         p.choose("implementer")
+
+
+def test_model_clis_are_found_off_path_in_the_usual_install_dirs(tmp_path, monkeypatch):
+    """Regression: a console started from a shell without ~/.local/bin on PATH reported
+    'Claude Code CLI not found' though claude and cursor-agent were installed there."""
+    from asf.adapters.models import claude_code, cursor_cli
+    from asf import util
+    home = tmp_path / "home"
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    for name in ("claude", "cursor-agent"):
+        (bin_dir / name).write_text("#!/bin/sh\n")
+        (bin_dir / name).chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("ASF_CLAUDE_BIN", raising=False)
+    monkeypatch.delenv("ASF_CURSOR_BIN", raising=False)
+    monkeypatch.setattr(util, "CLI_DIRS", ("~/.local/bin",))
+    assert claude_code.find_binary({}) == str(bin_dir / "claude")
+    assert cursor_cli.find_binary({}) == str(bin_dir / "cursor-agent")
+    # A path set on purpose is used as given, and a wrong one is reported, not silently replaced.
+    assert claude_code.find_binary({"binary": str(tmp_path / "nope")}) is None
