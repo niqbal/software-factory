@@ -249,6 +249,7 @@ const ACTION = {
   approve: ['Approve', 'primary', 'Records your approval; the factory merges and verifies.'],
   revise:  ['Send back with notes', '', 'The implementer works on top of this branch to address your notes.'],
   resume:  ['Resume', 'primary', 'Continues where it paused, with more time.'],
+  answer:  ['Answer', 'primary', 'Answer the question; the job continues with your answer.'],
   retry:   ['Retry', 'primary', 'Re-enters at the step that stopped (gates rerun on the same work).'],
   run:     ['Run now', '', 'Runs this job until it finishes or stops.'],
   rerun:   ['Start over', '', 'Cancels this job and starts the item again from the current default branch.'],
@@ -259,6 +260,11 @@ async function doAction(a) {
   if (a === 'reject') { const r = prompt('Why reject this job? (kept in the record)'); if (r === null) return; body.reason = r; }
   if (a === 'rerun' && !confirm('Cancel this job and start the work item over from the current default branch?')) return;
   if (a === 'revise') { const n = $('reviseNotes') && $('reviseNotes').value.trim(); if (!n) { tab = 'revise'; renderDetail(); return; } body.notes = n; }
+  if (a === 'answer') {
+    const t = $('answerText') && $('answerText').value.trim();
+    if (!t) { tab = 'overview'; renderDetail(); $('answerText').focus(); toast('Write your answer in the box first.'); return; }
+    body.text = t;
+  }
   if (a === 'merge' && !confirm('Merge this branch into ' + S.default_branch + ' now?')) return;
   if (a === 'deploy' && !confirm('Deploy ' + S.default_branch + ' now? This runs: ' + (D.data.deploy?.steps || []).join(', '))) return;
   await post(pa(`/jobs/${D.id}/${a}`), body, a);
@@ -289,7 +295,14 @@ function md(src) {
 
 function overview() {
   const d = D.data, parts = [];
-  if (d.needs_human_reason && D.state === 'needs_human') parts.push(`<div class="callout bad"><b>Why it stopped</b>\n${esc(d.needs_human_reason)}</div>`);
+  if (d.needs_human_reason && D.state === 'needs_human' && D.actions.includes('answer')) {
+    const posted = d.question_posted ? ' It is also asked on the issue: a reply there from someone with write access continues the job too.' : '';
+    parts.push(`<div class="callout bad"><b>The factory has a question</b>\n${esc(d.needs_human_reason)}</div>
+      <div class="sec"><p class="hint">Your answer is kept with the job, given to every agent from now on, and posted to the issue when its source writes back.${posted}</p>
+      <textarea id="answerText" placeholder="e.g. Only fix the scrolling. The better diff and the push to GitHub go in a separate issue."></textarea>
+      <div class="actions"><button class="primary" onclick="doAction('answer')">Answer and continue</button></div></div>`);
+  } else if (d.needs_human_reason && D.state === 'needs_human') parts.push(`<div class="callout bad"><b>Why it stopped</b>\n${esc(d.needs_human_reason)}</div>`);
+  if (d.answers?.length) parts.push(`<div class="sec"><h4>Answers given</h4>${d.answers.map(a => `<p class="hint">${esc(a.question)}</p><p><b>${esc(a.by)}</b>${a.source && a.source !== 'console' ? ' (on ' + esc(a.source) + ')' : ''}: ${esc(a.answer)}</p>`).join('')}</div>`);
   if (d.paused_reason && D.state === 'paused') parts.push(`<div class="callout warn"><b>Why it paused</b>\n${esc(d.paused_reason)}</div>`);
   if (d.error && D.state === 'failed') parts.push(`<div class="callout bad"><b>Error</b>\n${esc(d.error)}</div>`);
   if (D.state === 'awaiting_review') parts.push(`<div class="callout ok"><b>Delivered, not shipped yet.</b> Review the change, then merge it here or with git. The job counts as done only after the post-merge checks pass.</div>`);
@@ -312,7 +325,9 @@ function overview() {
 
 function renderDetail() {
   if (!D) return;
-  const acts = D.actions.map(a => { const [l, c, h] = ACTION[a] || [a, '', '']; return `<button class="${c}" title="${esc(h)}" onclick="doAction('${a}')">${esc(a === 'merge' ? l + S.default_branch : l)}</button>`; }).join('');
+  const acts = D.actions.map(a => { let [l, c, h] = ACTION[a] || [a, '', ''];
+    if (a === 'retry' && D.actions.includes('answer')) { c = ''; h = 'Asks again without an answer (the same question is likely). Answer instead.'; }
+    return `<button class="${c}" title="${esc(h)}" onclick="doAction('${a}')">${esc(a === 'merge' ? l + S.default_branch : l)}</button>`; }).join('');
   const t = (k, l) => `<button class="tab ${tab===k?'on':''}" onclick="tab='${k}';renderDetail()">${l}</button>`;
   let body = '';
   if (tab === 'overview') body = overview();
@@ -440,7 +455,9 @@ api('/api/health').then(h => { if (h.restart && ['waiting','updating'].includes(
 
 window.addEventListener('hashchange', route);
 route();
-setInterval(async () => { await tick(); if (P && selected && tab !== 'revise' && !busy) loadDetail(selected); }, 4000);
+// Keep a half-written answer: the periodic refresh would redraw the box empty.
+const typing = () => { const t = $('answerText'); return !!(t && (t.value.trim() || document.activeElement === t)); };
+setInterval(async () => { await tick(); if (P && selected && tab !== 'revise' && !busy && !typing()) loadDetail(selected); }, 4000);
 </script>
 </body>
 </html>

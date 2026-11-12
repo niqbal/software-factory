@@ -62,6 +62,11 @@ class IntakeAdapter(ABC):
     def report(self, item: WorkItem, status: str, message: str) -> None:
         """Optional write-back (comment, status). Off unless settings.write_back is true."""
 
+    # Optional, for sources with a discussion (the factory checks with hasattr):
+    #   comment(external_id, body)       post a comment on the item
+    #   replies(external_id, since)      trusted comments after `since`:
+    #                                    [{"id", "author", "body", "at"}], oldest first
+
 
 # ---------------------------------------------------------------------------
 # Execution: an isolated checkout where agents and gates run

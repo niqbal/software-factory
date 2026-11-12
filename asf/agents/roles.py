@@ -44,11 +44,18 @@ class PromptBuilder:
         return Template(_template("_common") + _template(role)).safe_substitute(values)
 
 
-def work_item_block(item: WorkItem, acceptance: list[str]) -> str:
+def work_item_block(item: WorkItem, acceptance: list[str], answers: list[dict] | None = None) -> str:
     crit = "\n".join(f"- {c}" for c in acceptance) or "- (none stated)"
     meta = f"source: {item.source_kind} {item.external_id}" + (f" ({item.url})" if item.url else "")
-    return (f"<work_item>\n{meta}\nkind: {item.kind}\ntitle: {item.title}\n\n{item.body.strip()}\n"
+    text = (f"<work_item>\n{meta}\nkind: {item.kind}\ntitle: {item.title}\n\n{item.body.strip()}\n"
             f"</work_item>\n\nAcceptance criteria:\n{crit}")
+    if answers:
+        # Questions the factory stopped to ask, answered by the requester. They refine the item
+        # above; where they disagree with it, the later answer wins.
+        text += "\n\nClarifications from the requester (answers to questions asked earlier):\n" + "\n".join(
+            f"- Q: {a.get('question', '').strip()}\n  A ({a.get('by') or 'requester'}): {a.get('answer', '').strip()}"
+            for a in answers)
+    return text
 
 
 class BudgetExceeded(RuntimeError):

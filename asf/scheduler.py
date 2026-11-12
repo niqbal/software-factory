@@ -164,6 +164,11 @@ class Scheduler:
                 self._say(f"{key}: {len(new)} new job(s)")
         except Exception as e:  # noqa: BLE001
             self._say(f"{key}: intake failed: {e}")
+        try:
+            for job_id in c.f.pick_up_replies():
+                self._say(f"{key}: {job_id} was answered on its issue; continuing")
+        except Exception as e:  # noqa: BLE001
+            self._say(f"{key}: checking replies failed: {e}")
 
     def pick(self, slots_free: int) -> list[tuple[Any, Any, str]]:
         """Choose up to slots_free (project, console, job_id) to start, per the mode."""

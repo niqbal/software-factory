@@ -47,6 +47,9 @@ class StubFactory:
     def intake_adapters(self):
         return dict(self._adapters)
 
+    def pick_up_replies(self):
+        return []
+
     def poll(self, source=None, ids=None, rerun=False):
         _ = (ids, rerun)
         if source == "local":

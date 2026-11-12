@@ -45,6 +45,11 @@ TRIAGE_SCHEMA = {
     "additionalProperties": False,
 }
 MONTH = 30 * 24 * 3600
+# Stops that ask the requester something (a reply continues the job), as opposed to stops for
+# the owner (gates, post-merge) or unfinished attempts (retried on their own).
+QUESTION_PREFIXES = ("clarification needed", "implementer blocked", "not automatable")
+# Hidden in comments the factory posts, so it never reads its own comments as replies.
+MARKER = "<!-- asf:{kind} {job} -->"
 # Errors worth one more try without a human: the backend or network hiccuped, the work didn't.
 TRANSIENT_ERRORS = [re.compile(p, re.I) for p in (
     r"\bHTTP 5\d\d\b", r"\[unavailable\]", r"service unavailable", r"bad gateway",
@@ -524,20 +529,114 @@ class Factory:
     def _needs_human(self, job: dict[str, Any], reason: str, incomplete: bool = False) -> None:
         """Park a job for a human. `incomplete` marks a stop where the work simply did not
         finish and no human decision is asked for, so the scheduler may retry it on its own."""
-        self.store.update_job(job["id"], "needs_human", needs_human_reason=reason, incomplete=incomplete)
+        self.store.update_job(job["id"], "needs_human", needs_human_reason=reason, incomplete=incomplete,
+                              stopped_at=time.time(), question_posted=False)
         self.notify("needs_human", self.store.job(job["id"]), reason)
+        if not incomplete and reason.startswith(QUESTION_PREFIXES):
+            self._post_question(self.store.job(job["id"]), reason)
+
+    # ------------------------------------------------------------ questions --
+    def _source(self, item: WorkItem) -> Any:
+        """The intake adapter an item came from, or None when it is not enabled."""
+        return self.intake_adapters().get(item.source_kind)
+
+    def _post_question(self, job: dict[str, Any], question: str) -> None:
+        """Ask the question on the item itself (e.g. a GitHub issue comment), where the
+        requester can answer it. Only with the source's write_back on."""
+        item = self._item(job)
+        src = self._source(item)
+        if not src or not hasattr(src, "comment") or not src.settings.get("write_back"):
+            return
+        body = (f"**Software factory: a question before `{job['id']}` can go on**\n\n> {question}\n\n"
+                "Answer in a comment here (or in the factory console); the job continues with your answer."
+                f"\n\n{MARKER.format(kind='question', job=job['id'])}")
+        try:
+            src.comment(item.external_id, body)
+            self.store.update_job(job["id"], question_posted=True)
+            self.store.event(job["id"], "question.posted", "factory", {"to": f"{item.source_kind}:{item.external_id}"})
+        except Exception as e:  # noqa: BLE001 - the console still shows the question
+            self.store.event(job["id"], "question.post_failed", "factory", {"error": str(e)[:500]})
+
+    def answer(self, job_id: str, text: str, by: str = "human", source: str = "console") -> str:
+        """Answer the question a stopped job is waiting on, then continue it.
+
+        The answer is kept on the job and shown to every agent from then on (with the question
+        it answers). Typed in the console, it is also posted to the item's source when that
+        source writes back, so the discussion stays in one place. Returns a short message."""
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("write an answer first")
+        job = self.store.job(job_id)
+        if job["state"] != "needs_human":
+            raise ValueError(f"{job_id} is {job['state']}; only a job that stopped for you can be answered")
+        d = job["data"]
+        answers = list(d.get("answers") or [])
+        answers.append({"question": d.get("needs_human_reason", ""), "answer": text, "by": by,
+                        "source": source, "at": time.time()})
+        self.store.update_job(job_id, answers=answers)
+        self.store.event(job_id, "job.answered", "human", {"by": by, "source": source, "answer": text[:2000]})
+        note = ""
+        if source == "console":
+            note = self._post_answer(self.store.job(job_id), text, by)
+        state = self.retry(job_id)
+        return f"answered; continuing from {state}{note}"
+
+    def _post_answer(self, job: dict[str, Any], text: str, by: str) -> str:
+        item = self._item(job)
+        src = self._source(item)
+        if not src or not hasattr(src, "comment"):
+            return ""
+        if not src.settings.get("write_back"):
+            return f" (not posted to {item.source_kind}: write_back is off)"
+        question = job["data"].get("needs_human_reason", "")
+        body = (f"**Answer from the factory console** ({by}, job `{job['id']}`)\n\n> {question}\n\n{text}"
+                f"\n\n{MARKER.format(kind='answer', job=job['id'])}")
+        try:
+            src.comment(item.external_id, body)
+            self.store.event(job["id"], "answer.posted", "factory", {"to": f"{item.source_kind}:{item.external_id}"})
+            return f"; posted to {item.source_kind} {item.external_id}"
+        except Exception as e:  # noqa: BLE001 - the answer is kept; only the copy failed
+            self.store.event(job["id"], "answer.post_failed", "factory", {"error": str(e)[:500]})
+            return f" (could not post to {item.source_kind}: {str(e)[:200]})"
+
+    def pick_up_replies(self) -> list[str]:
+        """Continue jobs whose question was answered on the item's source (a trusted comment
+        posted after the job stopped). Returns the ids of the jobs that continue."""
+        resumed = []
+        for job in self.store.jobs(["needs_human"]):
+            d = job["data"]
+            reason = d.get("needs_human_reason") or ""
+            if d.get("incomplete") or not reason.startswith(QUESTION_PREFIXES):
+                continue
+            item = self._item(job)
+            src = self._source(item)
+            if not src or not hasattr(src, "replies"):
+                continue
+            try:
+                replies = src.replies(item.external_id, since=d.get("stopped_at") or job["updated"])
+            except Exception as e:  # noqa: BLE001 - try again on the next poll
+                self.echo(f"replies for {job['id']}: {e}")
+                continue
+            if not replies:
+                continue
+            by = ", ".join(sorted({r["author"] for r in replies}))
+            text = "\n\n".join(r["body"].strip() for r in replies)
+            self.answer(job["id"], text, by=by, source=item.source_kind)
+            resumed.append(job["id"])
+            self.echo(f"{job['id']} answered on {item.source_kind} by {by}; continuing")
+        return resumed
 
     # -------------------------------------------------------------- states ---
     def _s_queued(self, job: dict[str, Any]) -> None:
         item = self._item(job)
         spec = self.cfg.role_model("triage")
         system = PromptBuilder(self.cfg, self.repo).system("triage", 1)
+        brief = work_item_block(item, item.acceptance, job["data"].get("answers"))
         if hasattr(self.provider, "structured_for"):
-            triage, turn = self.provider.structured_for("triage", system, work_item_block(item, item.acceptance),
-                                                        TRIAGE_SCHEMA)
+            triage, turn = self.provider.structured_for("triage", system, brief, TRIAGE_SCHEMA)
         else:
-            triage, turn = self.provider.structured(spec["model"], system, work_item_block(item, item.acceptance),
-                                                    TRIAGE_SCHEMA, spec.get("effort", "low"))
+            triage, turn = self.provider.structured(spec["model"], system, brief, TRIAGE_SCHEMA,
+                                                    spec.get("effort", "low"))
         self._charger(job["id"])("triage", turn)
         pre = policy.pre_tier(self.cfg, item, triage.get("tier_guess"))
         acceptance = item.acceptance or triage.get("acceptance_criteria", [])
@@ -559,7 +658,7 @@ class Factory:
 
     def _task(self, job: dict[str, Any], extra: str = "") -> str:
         item = self._item(job)
-        text = work_item_block(item, job["data"].get("acceptance", []))
+        text = work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
         revision = self._active_revision(job)
         if revision:
             text += ("\n\nThis change was already delivered on this branch; the working tree contains it. "
@@ -601,7 +700,7 @@ class Factory:
     def _s_testing(self, job: dict[str, Any]) -> None:
         tier = self._current_tier(job)
         item = self._item(job)
-        task = (work_item_block(item, job["data"].get("acceptance", []))
+        task = (work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
                 + "\n\nThe implementation is in the working tree. Read it with show_diff.")
         revision = self._active_revision(job)
         if revision:
@@ -655,7 +754,7 @@ class Factory:
         item = self._item(job)
         gates = "\n".join(f"- {g['name']}{'/' + g['package'] if g['package'] else ''}: {g['status']} "
                           f"({g['detail']})" for g in job["data"].get("gates", []))
-        task = (work_item_block(item, job["data"].get("acceptance", []))
+        task = (work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
                 + f"\n\nRisk tier: {tier}. Deterministic gates already run:\n{gates}\n\n"
                   "Review the change in the working tree with show_diff.")
         reviews, blocking = {}, []

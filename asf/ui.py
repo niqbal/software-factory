@@ -289,7 +289,7 @@ class Console:
         keep = ("needs_human_reason", "paused_reason", "error", "feedback", "manual_verification", "gates",
                 "reviews", "owner_review", "delivery", "post_merge", "deploy", "post_deploy", "acceptance",
                 "acceptance_met", "implementer", "tester", "branch", "delivered_at", "merged_at", "done_at",
-                "merged_by", "outcome", "triage")
+                "merged_by", "outcome", "triage", "answers", "question_posted")
         return {"id": job_id, "item": item[0], "title": item[1], "state": j["state"], "tier": j["tier"],
                 "created": j["created"], "updated": j["updated"], "running": self.job_running(job_id),
                 "data": {k: d.get(k) for k in keep}, "report": report, "cost_by_role": by_role,
@@ -326,6 +326,8 @@ class Console:
             acts += ["deploy"]
         if s == "paused":
             acts += ["resume", "reject"]
+        if s == "needs_human" and is_question(j["data"]):
+            acts += ["answer"]
         if s in ("needs_human", "failed"):
             acts += ["retry", "reject"]
         if s not in TERMINAL and s not in WAITING and s != "paused" and not self.job_running(j["id"]):
@@ -365,6 +367,10 @@ class Console:
             f.resume(job_id, float(body.get("extra_usd", 0)), float(body.get("extra_minutes", 600)))
             self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
             return "resumed"
+        if action == "answer":
+            msg = f.answer(job_id, body.get("text", ""), by=by)
+            self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
+            return msg
         if action == "retry":
             state = f.retry(job_id)
             f.store.update_job(job_id, extra_minutes=f.store.job(job_id)["data"].get("extra_minutes", 0) + 600)
@@ -396,6 +402,12 @@ class Console:
             src.rename(dst)
         jobs = self.f.poll()
         return f"queued {item_id} ({len(jobs)} new job(s))"
+
+
+def is_question(d: dict[str, Any]) -> bool:
+    """The job stopped to ask the requester something (not an unfinished attempt)."""
+    from .orchestrator import QUESTION_PREFIXES
+    return not d.get("incomplete") and (d.get("needs_human_reason") or "").startswith(QUESTION_PREFIXES)
 
 
 def current_reason(state: str, d: dict[str, Any]) -> str:
@@ -692,7 +704,16 @@ def make_handler(portfolio: Portfolio):
                     return self._send(200, {"message": portfolio.scheduler.stop()})
                 if rest == ["intake"]:
                     report = c.pull_intake()
-                    return self._send(200, {"message": report["message"], "errors": report["errors"],
+                    msg = report["message"]
+                    try:
+                        answered = c.f.pick_up_replies()
+                    except Exception as e:  # noqa: BLE001 - pulling work must not fail on this
+                        answered, msg = [], msg + f"; checking replies failed: {e}"
+                    for job_id in answered:
+                        c.background(f"run {job_id}", lambda j=job_id: c.run_guarded(j))
+                    if answered:
+                        msg += f"; {len(answered)} answered on their issue: {', '.join(answered)}"
+                    return self._send(200, {"message": msg, "errors": report["errors"],
                                              "new_jobs": report["new_jobs"]})
                 if rest == ["pause-all"]:
                     c.f.store.set_flag("paused_all", payload.get("reason") or "paused from the console")

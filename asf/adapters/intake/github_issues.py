@@ -15,6 +15,15 @@ from ..base import IntakeAdapter
 from ._http import hmac_hex, lower_headers, safe_eq
 
 FIELDS = "number,title,body,labels,url,author"
+TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")
+
+
+def _epoch(iso: str | None) -> float | None:
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat((iso or "").replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _kind(labels: list[str]) -> str:
@@ -67,6 +76,33 @@ class GitHubIssuesIntake(IntakeAdapter):
 
     def fetch(self, external_id: str) -> WorkItem:
         return self._to_item(self._gh("issue", "view", external_id, "--json", FIELDS))
+
+    def comment(self, external_id: str, body: str) -> None:
+        """Post a comment on the issue (the factory asking, or relaying a console answer)."""
+        res = (self.ctx.runner or run)(["gh", "issue", "comment", external_id, "--body", body],
+                                       cwd=self.ctx.repo, shell=False, timeout=60)
+        if not res.ok and "401" in (res.stdout + res.stderr) and _env_token():
+            res = (self.ctx.runner or run)(["gh", "issue", "comment", external_id, "--body", body],
+                                           cwd=self.ctx.repo, shell=False, timeout=60, env=_without_env_token())
+        if not res.ok:
+            raise RuntimeError(f"gh issue comment {external_id} failed: {res.tail(800)}")
+
+    def replies(self, external_id: str, since: float) -> list[dict[str, Any]]:
+        """Comments posted after `since` by people with write access to the repo (owner,
+        member, collaborator), oldest first. Comments the factory posted itself are skipped.
+        Anyone else's comment is ignored: it could steer the agents."""
+        data = self._gh("issue", "view", external_id, "--json", "comments") or {}
+        out = []
+        for c in data.get("comments") or []:
+            body = c.get("body") or ""
+            if "<!-- asf:" in body or c.get("authorAssociation") not in TRUSTED:
+                continue
+            at = _epoch(c.get("createdAt"))
+            if at is None or at <= since:
+                continue
+            out.append({"id": c.get("id") or c.get("url"), "author": (c.get("author") or {}).get("login", ""),
+                        "body": body, "at": at})
+        return sorted(out, key=lambda c: c["at"])
 
     def verify_webhook(self, headers: dict[str, str], body: bytes) -> bool:
         secret = self.ctx.secrets(self.settings.get("webhook_secret_env", "GITHUB_WEBHOOK_SECRET"))
