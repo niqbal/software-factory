@@ -122,6 +122,10 @@ class SandboxProvider(ABC):
         """A throwaway sandbox at the base commit, used to tell new failures from old ones."""
         raise NotImplementedError
 
+    def prepare(self, root: Path) -> None:
+        """Make a plain checkout at `root` able to run the project's commands, as a sandbox
+        would be (dependency folders, setup commands). Default: nothing to do."""
+
 
 # ---------------------------------------------------------------------------
 # Delivery: branch/PR/merge in the company's SCM

@@ -193,6 +193,8 @@ class Factory:
         target = job["data"].get("failed_state") or ("implementing" if job["data"].get("sandbox") else "queued")
         if target == "deploying":
             self.__dict__.pop("_deploy_cache", None)  # run the deploy again, not its cached failure
+        if target == "merged":
+            self.__dict__.pop("_post_merge_cache", None)  # likewise the post-merge checks
         partial: list[str] = []
         if target == "implementing" and job["data"].get("sandbox"):
             sb = self._sandbox(job)
@@ -838,7 +840,9 @@ class Factory:
         """Merged is not done: the default branch must still pass, and the deploy gate must hold."""
         failure = self._post_merge_checks()
         if failure:
-            self.store.update_job(job["id"], post_merge={"status": "fail", "detail": failure[:4000]})
+            # failed_state: a retry re-runs the checks; it must not rebuild work already merged.
+            self.store.update_job(job["id"], post_merge={"status": "fail", "detail": failure[:4000]},
+                                  failed_state="merged")
             return self._needs_human(job, f"post-merge check failed on {self.cfg.default_branch}: "
                                           f"{failure[:600]}")
         self.store.update_job(job["id"], post_merge={"status": "pass"})
@@ -991,6 +995,9 @@ class Factory:
         wt = tmp / "main"
         git(self.repo, "worktree", "add", "--detach", "-q", str(wt), self.cfg.default_branch)
         try:
+            # A bare checkout has no dependency folders (e.g. .venv): give it what sandboxes get,
+            # or commands like `.venv/bin/python -m pytest` cannot run at all.
+            self.sandboxes.prepare(wt)
             for cmd in commands:
                 res = run(cmd, cwd=wt, timeout=self.cfg.get("execution.command_timeout_s", 900),
                           env=sandbox_env(self.cfg.get("execution.env")))

@@ -156,6 +156,9 @@ class LocalWorktreeProvider(SandboxProvider):
     def _sandbox(self, root: Path, branch: str, base_sha: str) -> Sandbox:
         return WorktreeSandbox(self.ctx.repo, root, branch, base_sha, self.settings)
 
+    def prepare(self, root: Path) -> None:
+        self._prepare(root)
+
     def _prepare(self, root: Path) -> None:
         mode = self.settings.get("clone_mode", "shared")
         for rel in self.settings.get("clone_dirs", []):

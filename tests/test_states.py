@@ -28,6 +28,11 @@ def test_red_main_after_merge_is_not_done(invoice_repo, state, store):
     job = store.job(job_id)
     assert "post-merge check failed" in job["data"]["needs_human_reason"]
     assert job["data"]["post_merge"]["status"] == "fail"
+    # Once main is fixed, a retry re-runs the checks; it does not rebuild the merged work.
+    f.cfg.raw["observe"]["post_merge"] = ["true"]
+    assert f.retry(job_id) == "merged"
+    assert f.run_job(job_id) == "done"
+    assert not [e for e in store.events(job_id) if e["type"] == "sandbox.reset"]
 
 
 def test_merge_from_review_and_reject(invoice_repo, state, store):
@@ -139,3 +144,17 @@ def test_deploy_config_is_validated():
         config_mod.load(text="version: 1\ndeploy: {steps: [{name: x}]}\n")
     with pytest.raises(config_mod.ConfigError):
         config_mod.load(text="version: 1\ndeploy: {steps: [{name: x, run: y, approval: maybe}]}\n")
+
+
+def test_post_merge_checks_get_the_sandbox_dependency_folders(invoice_repo, state, store):
+    """Regression: post-merge ran in a bare worktree without clone_dirs, so a check like
+    `.venv/bin/python -m pytest` failed with 'No such file or directory' on every merge."""
+    (invoice_repo / ".gitignore").write_text("deps/\n")
+    sh(invoice_repo, "git", "add", ".gitignore")
+    sh(invoice_repo, "git", "commit", "-q", "-m", "ignore deps")
+    (invoice_repo / "deps").mkdir()
+    (invoice_repo / "deps" / "tool").write_text("installed\n")
+    f, job_id = delivered(invoice_repo, state, store, **{
+        "execution.clone_dirs": ["deps"], "observe.post_merge": ["test -f deps/tool"]})
+    assert f.merge_reviewed(job_id, by="owner") == "done"
+    assert store.job(job_id)["data"]["post_merge"]["status"] == "pass"
