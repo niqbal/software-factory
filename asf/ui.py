@@ -58,6 +58,10 @@ class Console:
             with self.lock:
                 self.busy.discard(job_id)
 
+    def job_running(self, job_id: str) -> bool:
+        with self.lock:
+            return job_id == self.current or job_id in self.busy
+
     def start_reconciler(self, interval: float = 20.0) -> None:
         """Notice merges done outside the factory and verify them, without anyone clicking."""
         def loop() -> None:
@@ -149,7 +153,7 @@ class Console:
                 "stops": m["per_job"].get(j["id"], {}).get("stops", 0),
                 "reason": current_reason(j["state"], d),
                 "branch": d.get("branch"), "owner_review": bool(d.get("owner_review")),
-                "created": j["created"], "updated": j["updated"], "running": j["id"] == self.current,
+                "created": j["created"], "updated": j["updated"], "running": self.job_running(j["id"]),
             })
         return {"repo": f.repo.name, "default_branch": f.cfg.default_branch, "metrics": m, "jobs": jobs,
                 "backlog": self.backlog(),
@@ -287,8 +291,9 @@ class Console:
                 "acceptance_met", "implementer", "tester", "branch", "delivered_at", "merged_at", "done_at",
                 "merged_by", "outcome", "triage")
         return {"id": job_id, "item": item[0], "title": item[1], "state": j["state"], "tier": j["tier"],
-                "created": j["created"], "updated": j["updated"], "data": {k: d.get(k) for k in keep},
-                "report": report, "cost_by_role": by_role, "backend_by_role": backend_by_role, "events": events,
+                "created": j["created"], "updated": j["updated"], "running": self.job_running(job_id),
+                "data": {k: d.get(k) for k in keep}, "report": report, "cost_by_role": by_role,
+                "backend_by_role": backend_by_role, "events": events,
                 "diff": self.diff(j), "actions": self.actions(j)}
 
     def diff(self, j: dict[str, Any]) -> dict[str, Any]:
@@ -323,7 +328,7 @@ class Console:
             acts += ["resume", "reject"]
         if s in ("needs_human", "failed"):
             acts += ["retry", "reject"]
-        if s not in TERMINAL and s not in WAITING and s != "paused":
+        if s not in TERMINAL and s not in WAITING and s != "paused" and not self.job_running(j["id"]):
             acts += ["run"]
         if s == "rejected" or s == "needs_human" or s == "failed":
             acts += ["rerun"]
@@ -366,6 +371,8 @@ class Console:
             self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
             return f"retrying from {state}"
         if action == "run":
+            if self.job_running(job_id):
+                raise RuntimeError("job is already running")
             self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
             return "running"
         if action == "rerun":
