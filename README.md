@@ -168,6 +168,8 @@ are pulled out at commit time with exactly their diff and the agent's `OWNER REV
 The report and the console lead with them, so the owner reviews a small diff instead of
 writing the change.
 
+For the `test` gate, coverage is path-based: every changed code file must be owned by at least one package that declares a `test` command. At tiers 1-3, uncovered code paths fail the gate and list the files; at tier 0, the gate passes with a warning that lists those files. Docs and config-only changes are not treated as code by this rule.
+
 ## Commands
 
 | Command | What it does |
