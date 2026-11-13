@@ -148,8 +148,16 @@ What was built (`asf/evals/`, usage in the README's Evals section):
   own history, variant `claude_code`, run in parallel. Both were delivered in shadow mode with
   every hidden test passing and no gate failures ($5.28 list price, 6 and 8 minutes). Two cases
   prove only that the harness works end to end, not how good the factory is.
-- Known limit: the hidden pass rate counts every test in a hidden file, including ones that
-  already passed on base, so `resolved` (all hidden tests pass) is the measure to compare.
+- **Second round (2026-11-14), for comparing the native providers:** cases are also imported
+  from the factory's own done jobs (`asf eval import`: the requester's ticket, the merged
+  result, which backend wrote it) and authored from the patterns where jobs struggled (browser
+  UI bugs, edge cases only a reviewer caught, test storage that diverged from the real one),
+  with their own hidden tests and, where needed, their own reference. Scoring is per test:
+  fail-to-pass must pass and pass-to-pass must not break, flaky tests are dropped, and a run
+  whose hidden tests use names the candidate never defined is counted as an interface mismatch
+  instead of a wrong fix. Variants: `claude_code`, `claude_code_native`, `cursor_cli`,
+  `cursor_native` (Grok 4.7) and `interactive`. The plan and the decision rule are in the
+  archive's `evals/STRATEGY.md`.
 - Not yet scored: reviewer blocking findings are recorded per run, but owner revisions need a
   human in the loop and are left to Phase 4.
 
