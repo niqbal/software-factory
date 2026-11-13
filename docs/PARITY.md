@@ -153,35 +153,56 @@ What was built (`asf/evals/`, usage in the README's Evals section):
 - Not yet scored: reviewer blocking findings are recorded per run, but owner revisions need a
   human in the loop and are left to Phase 4.
 
-### Phase 1: run Claude Code natively (1 to 2 weeks; the quality fix, and less code)
+### Phase 1: run Claude Code natively (built: `models.provider: claude_code_native`)
 
-The implementer, tester and CI fixer become real Claude Code sessions in the job's worktree.
-The broker stops executing tools and becomes the policy decision-maker.
+The implementer, tester and CI fixer are real Claude Code sessions in the job's worktree. The
+broker no longer executes their file and shell tools; it decides on them.
 
 ```
-claude -p --output-format stream-json
-  --append-system-prompt <role prompt>          # keep Claude Code's own instructions
-  --tools Read,Edit,Write,Glob,Grep,Bash,...    # plus the todo-list and subagent tools
-  --permission-mode dontAsk --allowedTools ...  # nothing prompts; anything unlisted is refused
-  --settings <generated: PreToolUse hook -> `asf policy-hook --job J --role R`>
-  --setting-sources project                     # CLAUDE.md, .claude/rules, skills from the repo
-  --json-schema <finish schema>                 # the final answer is still structured
+claude -p --output-format stream-json --verbose
+  --append-system-prompt <role prompt + tool mapping>   # Claude Code's own instructions stay
+  --tools Read,Edit,Write,Glob,Grep,Bash,Task,Skill
+  --permission-mode dontAsk --permission-prompts none   # nothing prompts
+  --settings <generated: PreToolUse hook -> asf/native_bridge.py hook>
+  --setting-sources project                             # CLAUDE.md, .claude/rules, skills from the repo
+  --strict-mcp-config --mcp-config <asf server: run_check, finish>
+  --model M --effort E --max-turns 150 --max-budget-usd <job's remaining $> [--resume S]
   cwd = the job's worktree, env = the scrubbed sandbox environment
 ```
 
-- The hook calls the broker's existing checks (`_rel`, `_check_read`, `_check_write`,
-  `_check_command`), so protected paths, test integrity, the reproduction lock and the
-  dependency-folder rules keep working. `.claude/**` joins the protected paths.
-- Bash becomes a real shell. Network tools, installs and git writes stay denied, and Claude
-  Code's sandboxed Bash or the Docker sandbox contains the rest.
-- `stream-json` (or a `PostToolUse` hook) feeds the same `tool.call` events the console shows.
-- The deterministic gates still re-check the final diff, whatever the agent did.
-- Folded in: instruction budget raised to 60k with nested `CLAUDE.md`; implementer, tester and
-  CI fixer on Opus at `high`; two fix rounds; fix rounds resume the implementer's session.
-- Ships as `models.provider: claude_code_native` beside `claude_code`, behind the Phase 0 evals.
-  The JSON emulation stays only for backends without a usable native mode.
-- **Deleted afterwards:** most of `claude_code.py`'s tool protocol and the `t_*` tool executors
-  for native roles. The broker shrinks to policy.
+What was built (`asf/adapters/models/claude_native.py`, `asf/native_bridge.py`):
+- **Policy by hook.** Each tool call goes to a token-protected loopback endpoint in the factory
+  process, which applies the broker's own checks (`_rel`, `_check_read`, `_check_write`, the
+  command deny-list), so protected paths, secret files, test integrity, the reproduction lock and
+  dependency folders hold. `.claude/**` is protected too; reads outside the checkout are refused.
+  Every decision is a `tool.call` event, as before, so the console and audit trail are unchanged.
+- **The factory's own tools over MCP.** `run_check` and `finish` are an MCP server backed by the
+  same broker, so checks run exactly as the gates will (e2e starts the app) and results land in
+  the same fields. No `--json-schema`: finishing is a tool call, as in the other modes.
+- **A real shell, audited.** Bash is a real shell; network tools, installs, git writes and
+  commands naming secret files are refused. A shell can still write files the hook never sees,
+  so after each session every changed file is checked against the role's rules and anything not
+  allowed is put back to where it was before the session.
+- **Budgets inside the session:** the job's remaining dollars (`--max-budget-usd`) and minutes
+  (wall clock). Spend is recorded from Claude Code's own per-session cost.
+- **Fix rounds resume the implementer's session** (`--resume`), so it keeps what it learned.
+- Usage limits and API errors fail like the other providers, so the scheduler waits for the
+  reset or a pool moves the role to another backend (`[backend:name]`).
+- Reviewers and triage keep the structured path; Docker sandboxes fall back to it (a shell on
+  this machine would run outside the container).
+- **Cursor too** (`models.provider: cursor_native`). `cursor-agent -p` fires a `preToolUse` hook
+  for every Read, Write, Delete, Grep, Shell and MCP call and honours its denials, so the same
+  bridge, policy and audit apply. Differences: the hook and MCP files must live in the
+  checkout's `.cursor/` (written per session, restored after, hidden from the agent); the role
+  prompt goes in the first message (no way to append to Cursor's own); MCP calls time out after
+  about a minute, so long checks run in the background behind `check_result`; no in-session
+  budget or turn cap, only the wall clock. The shared parts are in `adapters/models/native.py`.
+
+Still open in this phase: the instruction budget and model defaults (Opus at `high` for the
+writing roles, two fix rounds) are left to `factory.yaml` until the Phase 0 evals say which wins;
+`claude_code_native` is opt-in beside `claude_code` for the same reason. Once the evals favour
+it, the emulated tool protocol and the broker's `t_*` executors are kept only for backends
+without a native mode.
 
 ### Phase 2: checks the author cannot game (2 weeks; the main differentiator)
 

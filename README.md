@@ -104,14 +104,41 @@ subscriptions rather than API keys:
 
 | `models.provider` | What runs each agent turn |
 |---|---|
+| `claude_code_native` | The implementer, tester and CI fixer run as real Claude Code sessions in the job's worktree (see below); reviewers and triage as `claude_code` |
 | `claude_code` | `claude -p` with its own tools switched off (`--tools ""`) and structured output |
+| `cursor_native` | The same for Cursor: the writing roles run as real `cursor-agent` sessions in the worktree; reviewers and triage as `cursor_cli` |
 | `cursor_cli` | `cursor-agent -p --mode ask --sandbox enabled` in a scratch folder whose `.cursor/cli.json` denies all of Cursor's own tools |
 | `pool` | Several backends with a per-role preference order and failover |
 | `anthropic` | The Anthropic API (needs a key) |
 
-In every case the model only *requests* tool calls (as structured output or JSON), and asf's
-broker executes them, so permissions, protected paths and test integrity hold no matter which
-model is working. A pool:
+With the emulated providers the model only *requests* tool calls (as structured output or
+JSON), and asf's broker executes them, so permissions, protected paths and test integrity hold
+no matter which model is working.
+
+`claude_code_native` gives the writing roles what an interactive session has: Claude Code's own
+system prompt (the role prompt is appended to it), its own Read/Edit/Write/Glob/Grep/Bash,
+subagents and skills, the repository's `CLAUDE.md` files, one continuous context and a real
+shell. The broker still decides: a `PreToolUse` hook sends every tool call to the factory, which
+applies the same path, secret, protected-file, test-integrity and command rules; `run_check`
+and `finish` come from a small asf MCP server backed by the same broker; files a shell command
+changed are checked after the session and put back when the role may not change them. Network
+tools, installs and git writes are refused, and the job's remaining dollars and minutes are
+enforced inside the session (`--max-budget-usd`). A fix round resumes the implementer's own
+session. It needs a sandbox whose checkout is the boundary (`local_worktree`); with Docker the
+roles fall back to `claude_code`. Settings: `native_roles`, `session_max_turns` (150),
+`session_timeout_s` (3600), plus the `claude_code` ones. A pool can use it as a backend.
+
+`cursor_native` does the same with Cursor's agent, through Cursor's `preToolUse` hook and its
+MCP support, with its OS sandbox on for shell commands (`sandbox: enabled`). Cursor reads hooks
+and MCP servers only from the workspace, so asf writes `.cursor/hooks.json`, `mcp.json` and
+`cli.json` into the checkout for each session and puts back whatever was there afterwards; the
+agent can neither read nor change them. Cursor gives up on an MCP call after about a minute, so
+a longer `run_check` reports that it is still running and the agent waits with `check_result`.
+Cursor has no in-session budget or turn cap: the wall clock bounds a session, and spend is the
+`usd_per_mtok` estimate, as with `cursor_cli`. The shared machinery is in
+`adapters/models/native.py`.
+
+A pool:
 
 ```yaml
 models:
@@ -379,7 +406,8 @@ override any config value (CI uses this to switch delivery to GitHub).
 | Models: Anthropic with caching, effort per role, refusal fallbacks | `adapters/models/anthropic_provider.py` | Live-tested |
 | Models: Claude Code headless (`claude -p`), built-in tools off, tool calls as structured output, session resume | `adapters/models/claude_code.py` | Unit-tested with a fake CLI; live-tested on a two-turn tool loop |
 | Eval harness: cases with hidden tests, variants as config overlays, interactive baseline, report with the visible-versus-hidden gap | `asf/evals/` | Tested with the scripted provider and a fake `claude`; smoke-run live on a real case |
-| Not built yet | | See the plan in [docs/PARITY.md](docs/PARITY.md): native Claude Code workers, hidden acceptance checks, earned autonomy, reviewer-burden metrics, per-project lessons, epic splitting |
+| Models: native Claude Code and Cursor sessions for the writing roles, policy by pre-tool hook, `run_check`/`finish` over MCP, shell changes audited after each session | `adapters/models/native.py`, `claude_native.py`, `cursor_native.py`, `native_bridge.py` | Unit-tested with fake CLIs that call the real hook and MCP server; live-tested on a full job with each CLI |
+| Not built yet | | See the plan in [docs/PARITY.md](docs/PARITY.md): hidden acceptance checks, earned autonomy, reviewer-burden metrics, per-project lessons, epic splitting |
 
 ## Adding an adapter
 

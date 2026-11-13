@@ -24,6 +24,8 @@ AUTHOR_ENV = {
 
 
 class WorktreeSandbox(Sandbox):
+    host_shell = True
+
     def __init__(self, repo: Path, root: Path, branch: str, base_sha: str, settings: dict[str, Any]):
         self.repo, self.root, self.branch, self.base_sha = repo, root, branch, base_sha
         self.settings = settings

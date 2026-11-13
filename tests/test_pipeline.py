@@ -300,3 +300,29 @@ def test_resume_can_extend_the_time_budget(invoice_repo, state, store):
     assert "minutes" in store.job(job_id)["data"].get("pause_reason", "") or store.job(job_id)["state"] == "paused"
     f.resume(job_id, extra_minutes=60)
     assert f.run_job(job_id) == "awaiting_review"
+
+
+def test_native_sessions_resume_on_fix_rounds_and_get_the_budget(invoice_repo, state, store, monkeypatch):
+    # A native backend reports a session id; the implementer's fix round continues that session,
+    # and every agent run is told how much of the job's budget is left.
+    import asf.orchestrator as orch
+    calls, real = [], orch.run_agent
+
+    def spy(provider, cfg, role, system, task, broker, charge, **kw):
+        res = real(provider, cfg, role, system, task, broker, charge, **kw)
+        calls.append((role, kw))
+        res.data["session_id"] = f"S-{role}-{len(calls)}"
+        return res
+    monkeypatch.setattr(orch, "run_agent", spy)
+    f = factory(invoice_repo, state, store,
+                provider(implementer=[IMPL, IMPL_AGAIN], tester=[TESTER, TESTER], reviewer=[BLOCK, APPROVE],
+                         security=[APPROVE, APPROVE]))
+    job_id, _ = f.submit(item())
+    assert f.run_job(job_id) == "awaiting_review"
+    impl = [kw for role, kw in calls if role == "implementer"]
+    assert impl[0]["resume"] is None and impl[1]["resume"] == "S-implementer-1"
+    assert all(kw["resume"] is None for role, kw in calls if role != "implementer")
+    usd, minutes = calls[0][1]["budget_left"]
+    assert 0 < usd <= 5 and 0 < minutes <= 90
+    sessions = store.job(job_id)["data"]["native_sessions"]
+    assert sessions["implementer"]["id"] != "S-implementer-1"  # the fix round's session is now the latest

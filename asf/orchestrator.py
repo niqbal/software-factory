@@ -515,6 +515,16 @@ class Factory:
             self._check_budget(job_id)
         return charge
 
+    def _budget_left(self, job_id: str) -> tuple[float, float]:
+        """Dollars and minutes this job may still spend: the tighter of its own caps and the month's."""
+        job = self.store.job(job_id)
+        budget = self.cfg.budget_for(self._current_tier(job))
+        usd = budget.get("usd", 5.0) + job["data"].get("extra_budget_usd", 0) - self.store.job_cost(job_id)
+        month = self.cfg.get("budgets.monthly_cap_usd", 50) - self.store.spend_since(time.time() - MONTH)
+        minutes = (budget.get("minutes", 90) + job["data"].get("extra_minutes", 0)
+                   - (time.time() - job["data"].get("started", time.time())) / 60)
+        return min(usd, month), minutes
+
     def _check_budget(self, job_id: str) -> None:
         job = self.store.job(job_id)
         tier = job["tier"] if job["tier"] is not None else job["data"].get("pre_tier", 2)
@@ -551,9 +561,19 @@ class Factory:
                             protected_extra=self._repro_protected(job),
                             app_log=self.state_dir / "app-logs" / f"{job['id']}-{role}.log")
         system = self.prompts(sb).system(role, tier)
-        self.store.event(job["id"], "agent.start", role, {"tier": tier,
+        sessions = dict(job["data"].get("native_sessions") or {})
+        earlier = sessions.get(role) or {}
+        # A fix round continues the implementer's own session: it keeps what it read and why it chose
+        # what it did. Anything else starts fresh.
+        resume = earlier.get("id") if (role == "implementer" and job["data"].get("feedback")
+                                       and earlier.get("root") == str(sb.root)) else None
+        self.store.event(job["id"], "agent.start", role, {"tier": tier, "resume": bool(resume),
                                                           "model": self.cfg.role_model(role).get("model")})
-        result = run_agent(self.provider, self.cfg, role, system, task, broker, self._charger(job["id"]))
+        result = run_agent(self.provider, self.cfg, role, system, task, broker, self._charger(job["id"]),
+                           resume=resume, budget_left=self._budget_left(job["id"]))
+        if result.data.get("session_id"):
+            sessions[role] = {"id": result.data["session_id"], "root": str(sb.root)}
+            self.store.update_job(job["id"], native_sessions=sessions)
         self.store.event(job["id"], "agent.end", role, {
             "ok": result.ok, "turns": result.turns, "cost_usd": round(result.cost_usd, 4),
             "summary": result.summary[:2000], "data": {k: v for k, v in result.data.items() if k != "summary"}})

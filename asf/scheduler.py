@@ -141,7 +141,7 @@ class Scheduler:
         kind = m.get("provider", "anthropic")
         if kind == "pool":
             return list((m.get("backends") or {}).keys())
-        return [{"claude_code": "claude", "cursor_cli": "cursor"}.get(kind, kind)]
+        return [{"claude_code": "claude", "claude_code_native": "claude", "cursor_cli": "cursor", "cursor_native": "cursor"}.get(kind, kind)]
 
     def usable(self, c: Any) -> bool:
         return any(limits.limited_until(b) is None for b in self.backends_of(c))

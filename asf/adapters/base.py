@@ -76,6 +76,7 @@ class Sandbox(ABC):
     root: Path
     branch: str
     base_sha: str
+    host_shell: bool = False  # True when commands run on this machine in `root` (a native agent may use a shell)
 
     @abstractmethod
     def exec(self, command: str, cwd: str = ".", timeout: float = 900) -> ExecResult: ...
@@ -279,7 +280,9 @@ BUILTIN: dict[str, dict[str, str]] = {
         "anthropic": "asf.adapters.models.anthropic_provider:AnthropicProvider",
         "scripted": "asf.adapters.models.scripted:ScriptedProvider",
         "claude_code": "asf.adapters.models.claude_code:ClaudeCodeProvider",
+        "claude_code_native": "asf.adapters.models.claude_native:ClaudeNativeProvider",
         "cursor_cli": "asf.adapters.models.cursor_cli:CursorProvider",
+        "cursor_native": "asf.adapters.models.cursor_native:CursorNativeProvider",
         "pool": "asf.adapters.models.pool:PoolProvider",
     },
 }
