@@ -770,14 +770,19 @@ class Factory:
                 blocking.append(f"- [{role}] requested changes: {res.data.get('summary')}")
         self.store.update_job(job["id"], reviews=reviews)
         if not blocking:
-            self.store.update_job(job["id"], "committing")
+            self.store.update_job(job["id"], "committing", unresolved_review=[])
             return
         rounds = job["data"].get("review_rounds", 0)
         if rounds < self.cfg.get("limits.fix_rounds", 1):
             self.store.update_job(job["id"], "implementing", review_rounds=rounds + 1,
                                   feedback="\n".join(blocking))
             return
-        self._needs_human(job, "reviewers still block after fix rounds:\n" + "\n".join(blocking))
+        # Out of fix rounds. Deliver anyway as a draft PR so a human can see the change and decide
+        # (merge, /revise, or reject); the unresolved findings keep the agent from ever merging it.
+        self.store.event(job["id"], "review.unresolved", "factory", {"findings": blocking})
+        held = {**decision, "may_agent_merge": False,
+                "reason": f"reviewers still block after fix rounds ({len(blocking)} unresolved finding(s))"}
+        self.store.update_job(job["id"], "committing", unresolved_review=blocking, decision=held)
 
     def _s_committing(self, job: dict[str, Any]) -> None:
         sb = self._sandbox(job)

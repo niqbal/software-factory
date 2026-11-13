@@ -15,6 +15,13 @@ def render_report(job: dict[str, Any], item: WorkItem, runs: list[dict[str, Any]
     lines = [f"## {item.title}", ""]
     src = f"{item.source_kind} `{item.external_id}`" + (f" ({item.url})" if item.url else "")
     lines += [f"Work item: {src}", f"Factory job: `{job['id']}`, risk tier **{job.get('tier')}**", ""]
+    unresolved = d.get("unresolved_review") or []
+    if unresolved:
+        lines += ["### :warning: Unresolved review findings", "",
+                  "The reviewers still block this change after the factory's fix rounds. It is delivered "
+                  "for a human to decide: merge it as is, comment `/revise <notes>`, or reject it. "
+                  "The factory will not merge it on its own.", ""]
+        lines += unresolved + [""]
     revisions = [rv for rv in d.get("revisions", []) if rv.get("commit")]
     if revisions:
         lines += ["### Revisions", ""]

@@ -95,15 +95,24 @@ def test_merge_after_approval(invoice_repo, state, store):
         "Discount truncates" in sh(invoice_repo, "git", "log", "-2", "--format=%B", "main")
 
 
-def test_reviewer_findings_loop_then_human(invoice_repo, state, store):
+def test_reviewer_findings_loop_then_draft_pr_for_human(invoice_repo, state, store):
+    # Even with autonomy that would let the agent merge tier 2, a change the reviewers still block
+    # is delivered for a human to review, never merged.
     f = factory(invoice_repo, state, store,
                 provider(implementer=[IMPL, IMPL_AGAIN], tester=[TESTER, TESTER], reviewer=[BLOCK, BLOCK],
-                         security=[APPROVE, APPROVE]))
+                         security=[APPROVE, APPROVE]),
+                **{"autonomy.shadow": False, "autonomy.max_merge_tier": 2, "delivery.draft": False})
     job_id, _ = f.submit(item())
-    assert f.run_job(job_id) == "needs_human"
+    assert f.run_job(job_id) == "awaiting_review"
     job = store.job(job_id)
     assert job["data"]["review_rounds"] == 1
-    assert "negative percent" in job["data"]["needs_human_reason"]
+    assert job["data"]["decision"]["may_agent_merge"] is False
+    assert any("negative percent" in b for b in job["data"]["unresolved_review"])
+    assert job["data"]["delivery"]["branch"]
+    report = open(job["data"]["report"]).read()
+    assert "Unresolved review findings" in report and "negative percent" in report
+    assert "Discount truncates" not in sh(invoice_repo, "git", "log", "-3", "--format=%B", "main")
+    assert any(e["type"] == "review.unresolved" for e in store.events(job_id))
 
 
 def test_budget_pause_and_resume(invoice_repo, state, store):

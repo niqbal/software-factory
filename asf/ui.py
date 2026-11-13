@@ -289,7 +289,7 @@ class Console:
         keep = ("needs_human_reason", "paused_reason", "error", "feedback", "manual_verification", "gates",
                 "reviews", "owner_review", "delivery", "post_merge", "deploy", "post_deploy", "acceptance",
                 "acceptance_met", "implementer", "tester", "branch", "delivered_at", "merged_at", "done_at",
-                "merged_by", "outcome", "triage", "answers", "question_posted")
+                "merged_by", "outcome", "triage", "answers", "question_posted", "unresolved_review")
         return {"id": job_id, "item": item[0], "title": item[1], "state": j["state"], "tier": j["tier"],
                 "created": j["created"], "updated": j["updated"], "running": self.job_running(job_id),
                 "data": {k: d.get(k) for k in keep}, "report": report, "cost_by_role": by_role,

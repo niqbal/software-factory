@@ -305,6 +305,7 @@ function overview() {
   if (d.answers?.length) parts.push(`<div class="sec"><h4>Answers given</h4>${d.answers.map(a => `<p class="hint">${esc(a.question)}</p><p><b>${esc(a.by)}</b>${a.source && a.source !== 'console' ? ' (on ' + esc(a.source) + ')' : ''}: ${esc(a.answer)}</p>`).join('')}</div>`);
   if (d.paused_reason && D.state === 'paused') parts.push(`<div class="callout warn"><b>Why it paused</b>\n${esc(d.paused_reason)}</div>`);
   if (d.error && D.state === 'failed') parts.push(`<div class="callout bad"><b>Error</b>\n${esc(d.error)}</div>`);
+  if (D.state === 'awaiting_review' && d.unresolved_review?.length) parts.push(`<div class="callout bad"><b>Reviewers still block this change</b> after the fix rounds. It was delivered so you can decide: merge it as is, revise it, or reject it.\n${esc(d.unresolved_review.join('\n'))}</div>`);
   if (D.state === 'awaiting_review') parts.push(`<div class="callout ok"><b>Delivered, not shipped yet.</b> Review the change, then merge it here or with git. The job counts as done only after the post-merge checks pass.</div>`);
   const o = d.owner_review;
   if (o && (o.files?.length || o.notes)) parts.push(`<div class="sec"><div class="callout violet"><b>Owner review: the lines only you can approve</b>${o.notes ? '\n' + esc(o.notes) : ''}${o.files?.length ? '\nFiles: ' + o.files.map(esc).join(', ') : ''}</div>${renderDiff(o.diff)}</div>`);
