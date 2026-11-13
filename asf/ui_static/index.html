@@ -357,6 +357,10 @@ function reproEvidence(d) {
 
 function renderDetail() {
   if (!D) return;
+  // The periodic refresh redraws the panel: on the same job and tab, keep the reader's place in the diff.
+  const same = renderDetail.tab === tab && renderDetail.job === D.id;
+  const keep = same ? [...$('detail').querySelectorAll('.diff')].map(e => e.scrollTop) : [];
+  renderDetail.tab = tab; renderDetail.job = D.id;
   const acts = D.actions.map(a => { let [l, c, h] = ACTION[a] || [a, '', ''];
     if (a === 'retry' && D.actions.includes('answer')) { c = ''; h = 'Asks again without an answer (the same question is likely). Answer instead.'; }
     return `<button class="${c}" title="${esc(h)}" onclick="doAction('${a}')">${esc(a === 'merge' ? l + S.default_branch : l)}</button>`; }).join('');
@@ -372,6 +376,7 @@ function renderDetail() {
     <div class="actions">${acts || '<span class="hint">Nothing to do: the factory is working on it or it is finished.</span>'}</div></div>
     <div class="tabs">${t('overview','Overview')}${t('diff','Diff')}${t('report','Report')}${t('timeline','Timeline')}${D.actions.includes('revise') ? t('revise','Revise') : ''}</div>
     <div class="body">${body}</div>`;
+  $('detail').querySelectorAll('.diff').forEach((e, i) => { if (keep[i]) e.scrollTop = keep[i]; });
 }
 
 async function queueItem(id) { await post(pa(`/backlog/${id}/queue`), {}, 'queue ' + id); }
