@@ -40,6 +40,7 @@ from ..projects import record
 from ..setup_wizard import code_root, first_item
 from ..store import Store
 from ..util import git, run
+from . import check as check_mod
 from . import score, workspace
 from .cases import Case, EvalError, EvalSet, guard_archive
 from .variants import INTERACTIVE_TOOLS, Variant
@@ -62,6 +63,8 @@ class Options:
     echo: Callable[[str], None] = print
     sleep: Callable[[float], None] = time.sleep
     spent: float = 0.0
+    force: bool = False
+    checks: dict[str, dict[str, Any]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -92,6 +95,23 @@ def run_set(evalset: EvalSet, variants: list[Variant], cases: list[Case], opts: 
             runnable.append(v)
     if not runnable:
         raise EvalError("no variant can run in this build of asf")
+    checks = {}
+    for c in cases:
+        found = check_mod.load_check(evalset, c)
+        if found is None:
+            opts.echo(f"checking {c.id} (hidden tests on base and reference)")
+            try:
+                found = check_mod.check_case(evalset, c, opts.echo)
+            except EvalError as e:
+                found = {"problems": [str(e)]}
+        if found["problems"] and not opts.force:
+            opts.echo(f"skip case {c.id}: {'; '.join(found['problems'])} (fix it, or pass --force)")
+            continue
+        checks[c.id] = found
+    cases = [c for c in cases if c.id in checks]
+    if not cases:
+        raise EvalError("no case passed its check")
+    opts.checks = checks
     run_dir.mkdir(parents=True, exist_ok=True)
     meta = {"run_id": opts.run_id, "set": evalset.name, "started": time.time(), "asf": code_version(),
             "variants": {v.name: {"kind": v.kind, "hash": v.hash, "source": v.source} for v in runnable},
@@ -128,6 +148,7 @@ def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Option
     work = workspace.eval_home() / "work" / evalset.name / opts.run_id / variant.name / f"{case.id}-r{k}"
     result: dict[str, Any] = {"case": case.id, "variant": variant.name, "kind": variant.kind, "repeat": k,
                               "run_id": opts.run_id, "set": evalset.name, "variant_hash": variant.hash,
+                              "tags": case.tags, "reference_by": case.reference_by,
                               "started": time.time()}
     with opts._lock:
         over = opts.max_usd is not None and opts.spent >= opts.max_usd
@@ -180,7 +201,7 @@ def _setup(case: Case, variant: Variant | None, work: Path, out_dir: Path,
     echo(f"checkout {case.repo} at {case.base[:12]}")
     co, base = workspace.checkout(case, work / "repo")
     m = workspace.mirror(case)
-    ref = workspace.resolve(m, case.reference)
+    ref = workspace.reference_sha(case, m)
     raw, source = workspace.base_config(case, co)
     if variant is not None:
         why = variant.unavailable(raw)
@@ -195,12 +216,13 @@ def _setup(case: Case, variant: Variant | None, work: Path, out_dir: Path,
 
 
 def _score(case: Case, cfg: Config, co: Path, base: str, patch: str, m: Path, ref: str, out_dir: Path,
-           echo: Callable[[str], None]) -> dict[str, Any]:
+           echo: Callable[[str], None], check: dict[str, Any] | None = None) -> dict[str, Any]:
     (out_dir / "candidate.diff").write_text(patch)
     ref_patch = git(m, "diff", "--binary", base, ref)
     diff = score.compare(score.numstat(patch, cfg), score.numstat(ref_patch, cfg))
     echo("scoring against the hidden tests")
     hidden, log = score.score(case, cfg, co, base, patch, m, ref)
+    hidden = score.against_check(hidden, check)
     (out_dir / "hidden.log").write_text(log)
     return {"hidden": hidden, "diff": diff, "base_sha": base, "reference_sha": ref}
 
@@ -269,9 +291,12 @@ def _factory(case: Case, variant: Variant, work: Path, out_dir: Path, opts: Opti
     if report and Path(report).exists():
         shutil.copy(report, out_dir / "report.md")
     patch = _candidate_patch(f, store.job(job_id), co, base, cfg, metrics)
-    out = {**metrics, "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
+    # Cursor reports tokens, not dollars: its costs are usd_per_mtok estimates.
+    estimated = "cursor" in variant.backends(cfg.raw)
+    out = {**metrics, "cost_estimated": estimated, "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
            "limit_hits": limit_hits, "config_hash": cfg.version_hash}
-    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo))
+    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo,
+                      opts.checks.get(case.id)))
     return out
 
 
@@ -357,7 +382,8 @@ def _interactive(case: Case, variant: Variant, work: Path, out_dir: Path, opts: 
            "turns": turns, "auto_retries": 0, "stop_reason": outcome if final != "finished" else "",
            "summary": outcome[:2000], "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
            "limit_hits": limit_hits, "config_hash": cfg.version_hash}
-    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo))
+    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo,
+                      opts.checks.get(case.id)))
     return out
 
 

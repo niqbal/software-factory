@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from ..util import git
+from . import check as check_mod
 from . import mine as mine_mod
 from . import report as report_mod
 from . import runner, score, variants, workspace
@@ -53,6 +52,7 @@ def add_parser(sub: Any) -> None:
     r.add_argument("--keep", action="store_true", help="keep checkouts and state folders for inspection")
     r.add_argument("--run-id", help="name for this run (default: a timestamp)")
     r.add_argument("--report", action="store_true", help="print the set's report afterwards")
+    r.add_argument("--force", action="store_true", help="run cases whose check found problems")
 
     p = es.add_parser("report", parents=[common], help="per-variant tables; writes JSON and Markdown into the archive")
     p.add_argument("--set", dest="set_name", required=True)
@@ -111,45 +111,17 @@ def _check(args: argparse.Namespace, root: Path) -> int:
     cases = es.cases(args.cases)
     guard_archive(root, [c.local_repo for c in cases if c.local_repo])
     bad = 0
-    out_dir = es.dir / "checks"
-    out_dir.mkdir(parents=True, exist_ok=True)
     for case in cases:
-        work = workspace.eval_home() / "work" / es.name / "check" / case.id
         try:
-            co, base = workspace.checkout(case, work / "repo")
-            m = workspace.mirror(case)
-            ref = workspace.resolve(m, case.reference)
-            raw, source = workspace.base_config(case, co)
-            cfg = workspace.eval_config(raw)
-            workspace.prepare(case, co, cfg.raw)
-            overlay, runnable = score.hidden_files(case, cfg, m, base, ref)
-            on_base, _ = score.score(case, cfg, co, base, "", m, ref)
-            ref_patch = git(m, "diff", "--binary", base, ref)
-            on_ref, log = score.score(case, cfg, co, base, ref_patch, m, ref)
+            c = check_mod.check_case(es, case)
         except EvalError as e:
             print(f"FAIL  {case.id}: {e}")
             bad += 1
             continue
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
-        problems = []
-        if not runnable:
-            problems.append("no runnable hidden tests")
-        if not on_ref.get("all_pass"):
-            problems.append(f"hidden tests fail on the reference ({on_ref.get('passed')}/{on_ref.get('total')})")
-        if on_base.get("all_pass"):
-            problems.append("hidden tests already pass on base: they do not test the change")
-        result = {"case": case.id, "checked": time.time(), "config": source, "hidden_tests": runnable,
-                  "overlay": overlay, "on_base": on_base, "on_reference": on_ref, "problems": problems}
-        (out_dir / f"{case.id}.json").write_text(json.dumps(result, indent=1))
-        if problems:
-            bad += 1
-            print(f"FAIL  {case.id}: {'; '.join(problems)}")
-            if not on_ref.get("all_pass"):
-                print("      " + log[-1500:].replace("\n", "\n      "))
-        else:
-            print(f"ok    {case.id}: {len(runnable)} hidden test file(s); base {on_base.get('passed')}/"
-                  f"{on_base.get('total')}, reference {on_ref.get('passed')}/{on_ref.get('total')}")
+        print(check_mod.summary(c))
+        if c["problems"] and c.get("reference_log_tail"):
+            print("      " + c["reference_log_tail"][-1500:].replace("\n", "\n      "))
+        bad += bool(c["problems"])
     return 1 if bad else 0
 
 
@@ -161,7 +133,7 @@ def _run(args: argparse.Namespace, root: Path) -> int:
     if args.repeat < 1 or args.jobs < 1:
         raise EvalError("--repeat and --jobs must be at least 1")
     opts = runner.Options(repeat=args.repeat, jobs=args.jobs, keep=args.keep, max_usd=args.max_usd,
-                          wait=not args.no_wait, run_id=args.run_id or "",
+                          wait=not args.no_wait, run_id=args.run_id or "", force=args.force,
                           echo=lambda msg: print(msg, flush=True))
     results = runner.run_set(es, vs, cases, opts)
     errors = [r for r in results if r.get("final_state") == "harness_error"]

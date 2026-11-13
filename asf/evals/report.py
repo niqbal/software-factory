@@ -115,6 +115,8 @@ def summarize(results: list[dict[str, Any]], baseline: str | None = None) -> dic
             "harness_errors": sum(1 for r in rows if r.get("final_state") == "harness_error"),
             "states": dict(Counter(r.get("final_state", "?") for r in ok)),
             "spent_usd": round(sum(float(r.get("cost_usd") or 0) for r in ok), 2),
+            "cost_estimated": any(r.get("cost_estimated") for r in ok),
+            "scored_per_file": sum(1 for r in ok if (r.get("hidden") or {}).get("scored") == "per file"),
             "repeat_noise": round(mean(spreads), 4) if spreads else None,
             "metrics": metrics,
         }
@@ -137,8 +139,28 @@ def summarize(results: list[dict[str, Any]], baseline: str | None = None) -> dic
         if s["skipped"] or s["harness_errors"]:
             flags.append(f"{v}: {s['skipped']} skipped and {s['harness_errors']} harness error(s) are "
                          "left out of the numbers.")
+    for v, s in summary.items():
+        if s["cost_estimated"]:
+            flags.append(f"{v}: dollars are estimates from usd_per_mtok (Cursor reports tokens, not cost); "
+                         "compare it on resolved rate and minutes.")
+        if s["scored_per_file"]:
+            flags.append(f"{v}: {s['scored_per_file']} run(s) scored per file, not per test (no check data).")
     return {"generated": time.time(), "baseline": baseline, "variants": summary, "comparisons": comparisons,
-            "flags": flags, "per_case": _case_table(pc)}
+            "flags": flags, "per_case": _case_table(pc), "by_tag": by_tag(results)}
+
+
+def by_tag(results: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
+    """tag -> variant -> resolved rate over the tag's cases. `by:<author>` tags who wrote the reference."""
+    tagged: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in results:
+        for t in list(r.get("tags") or []) + ([f"by:{r['reference_by']}"] if r.get("reference_by") else []):
+            tagged[t].append(r)
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for tag, rows in sorted(tagged.items()):
+        pc = per_case(rows)
+        out[tag] = {v: _stat([mean(vals["resolved"]) for vals in cases.values() if vals.get("resolved")])
+                    for v, cases in pc.items()}
+    return out
 
 
 def paired(a: dict[str, dict[str, list[float]]], b: dict[str, dict[str, list[float]]], metric: str) -> dict[str, Any]:
@@ -231,7 +253,8 @@ def render(rep: dict[str, Any], set_name: str, md: bool = False) -> str:
     for v, s in rep["variants"].items():
         m = s["metrics"]
         states = ", ".join(f"{k} {n}" for k, n in sorted(s["states"].items()))
-        rows.append([v, _fmt("cost_usd", m["cost_usd"]), _fmt("minutes", m["minutes"]),
+        rows.append([v, _fmt("cost_usd", m["cost_usd"]) + (" est." if s["cost_estimated"] else ""),
+                     _fmt("minutes", m["minutes"]),
                      _fmt("fix_rounds", m["fix_rounds"]), _fmt("denials", m["denials"]),
                      f"${s['spent_usd']:.2f}", states or "-"])
     out += [_table(header, rows, md), ""]
@@ -240,6 +263,12 @@ def render(rep: dict[str, Any], set_name: str, md: bool = False) -> str:
         header = ["variant"] + [LABELS[m] for m in COMPARE]
         rows = [[v] + [_fmt_diff(m, c[m]) for m in COMPARE] for v, c in rep["comparisons"].items()]
         out += [_table(header, rows, md), ""]
+    if rep.get("by_tag"):
+        out.append(h("Resolved, by tag"))
+        variants = list(rep["variants"])
+        rows = [[tag] + [_fmt("resolved", by_v[v]) if v in by_v else "-" for v in variants]
+                for tag, by_v in rep["by_tag"].items()]
+        out += [_table(["tag"] + variants, rows, md), ""]
     if rep["per_case"]:
         out.append(h("Per case (resolved runs / runs, hidden pass rate)"))
         variants = list(rep["variants"])

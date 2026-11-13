@@ -37,17 +37,33 @@ def changed_files(repo: Path, base: str, ref: str) -> list[tuple[str, str]]:
     return rows
 
 
+def hidden_overlay(case: Case, cfg: Config, mirror: Path, base: str, ref: str) -> dict[str, bytes | None]:
+    """Hidden files to write over a candidate: path -> content (None deletes the file).
+
+    From the case's authored folder (`hidden_dir`) when it has one, else the test files the
+    reference adds or changes (or the `hidden_tests` the case lists)."""
+    folder = case.hidden_folder
+    if folder is not None:
+        if not folder.is_dir():
+            from .cases import EvalError
+            raise EvalError(f"case {case.id}: hidden_dir {folder} does not exist")
+        return {str(p.relative_to(folder)): p.read_bytes() for p in sorted(folder.rglob("*"))
+                if p.is_file() and "__pycache__" not in p.parts}
+    paths = list(case.hidden_tests) or [p for _, p in changed_files(mirror, base, ref) if cfg.is_test_path(p)]
+    return {p: file_at(mirror, ref, p) for p in paths}
+
+
 def hidden_files(case: Case, cfg: Config, mirror: Path, base: str, ref: str) -> tuple[list[str], list[str]]:
-    """(files written from the reference, files run). The first includes deletions and helpers."""
-    if case.hidden_tests:
-        overlay = list(case.hidden_tests)
+    """(files written over the candidate, files run). The first includes deletions and helpers."""
+    overlay = hidden_overlay(case, cfg, mirror, base, ref)
+    present = [p for p, c in overlay.items() if c is not None]
+    if case.hidden_tests and case.hidden_folder is not None:
+        runnable = [p for p in case.hidden_tests if p in present]
     else:
-        overlay = [p for _, p in changed_files(mirror, base, ref) if cfg.is_test_path(p)]
-    present = {p for p in overlay if file_at(mirror, ref, p) is not None}
-    runnable = [p for p in overlay if p in present and any_match(p, RUNNABLE)]
+        runnable = [p for p in present if any_match(p, RUNNABLE)]
     if not runnable and case.hidden_tests:
-        runnable = [p for p in overlay if p in present]
-    return overlay, runnable
+        runnable = [p for p in case.hidden_tests if p in present]
+    return list(overlay), runnable
 
 
 def file_at(repo: Path, ref: str, path: str) -> bytes | None:
@@ -125,10 +141,10 @@ def command_for(case: Case, cfg: Config, path: str) -> tuple[str, str] | None:
         folder = str(Path(path).parent)
         repl = {"{tests}": path, "{args}": path, "{dirs}": folder, "{pkgs}": "./" + folder}
         if not any(k in cmd for k in repl):
-            return f"{cmd} {path}", "."
+            return verbose(f"{cmd} {path}"), "."
         for k, v in repl.items():
             cmd = cmd.replace(k, v)
-        return cmd, "."
+        return verbose(cmd), "."
     owners = [p for p in cfg.packages if p.commands.get("test") and
               (p.root in ("", ".") or path.startswith(p.root.rstrip("/") + "/"))]
     if not owners:
@@ -137,48 +153,130 @@ def command_for(case: Case, cfg: Config, path: str) -> tuple[str, str] | None:
     root = "" if pkg.root in ("", ".") else pkg.root.rstrip("/") + "/"
     rel = path[len(root):]
     cmd = pkg.commands["test"]
+    if rel.endswith("_test.go"):
+        # go test takes packages, not files; the whole package runs (pass-to-pass covers the rest).
+        rel = "./" + (str(Path(rel).parent) if str(Path(rel).parent) != "." else "")
+        cmd = cmd.replace("./...", "")
     cmd = cmd.replace("{args}", rel) if "{args}" in cmd else f"{cmd} {rel}"
-    return cmd, pkg.root or "."
+    return verbose(cmd), pkg.root or "."
+
+
+def verbose(cmd: str) -> str:
+    """Ask the runner to name every test it ran, so results can be read per test."""
+    if "pytest" in cmd and " -rA" not in cmd:
+        return cmd + " -rA"
+    if re.search(r"\bgo test\b|/go test\b", cmd) and " -v" not in cmd:
+        return cmd.replace(" test ", " test -v ", 1)
+    if "vitest" in cmd and "--reporter" not in cmd:
+        return cmd + " --reporter=verbose"
+    if "jest" in cmd and "--verbose" not in cmd:
+        return cmd + " --verbose"
+    return cmd
+
+
+PYTEST_ID = re.compile(r"^(PASSED|FAILED|ERROR|XPASS|XFAIL|SKIPPED)\s+(\S+)", re.M)
+GO_ID = re.compile(r"^\s*--- (PASS|FAIL|SKIP): (\S+)", re.M)
+JS_ID = re.compile(r"^\s*([✓✔√×✕✗])\s+(.+?)(?:\s+\d+\s*m?s)?\s*$", re.M)
+
+
+def test_ids(output: str, file: str) -> dict[str, bool]:
+    """Test id -> passed, read from a runner's verbose output. Empty when nothing is named."""
+    out: dict[str, bool] = {}
+    for status, tid in PYTEST_ID.findall(output):
+        if status == "SKIPPED":
+            continue
+        out[tid] = status in ("PASSED", "XFAIL")
+    if out:
+        return out
+    for status, tid in GO_ID.findall(output):
+        if status != "SKIP":
+            out[f"{file}::{tid}"] = status == "PASS"
+    if out:
+        return out
+    for mark, tid in JS_ID.findall(output):
+        out[f"{file}::{tid.strip()}"] = mark in "✓✔√"
+    return out
 
 
 def run_hidden(case: Case, cfg: Config, root: Path, runnable: list[str]) -> tuple[dict[str, Any], str]:
+    """Run each hidden test file (each go package once). Returns per-file and per-test results."""
     timeout = cfg.get("execution.command_timeout_s", 900)
     env = sandbox_env(cfg.get("execution.env"))
-    files, log = [], []
+    files, log, tests, seen = [], [], {}, set()
     for path in runnable:
         how = command_for(case, cfg, path)
         if not how:
             files.append({"file": path, "ok": False, "passed": 0, "total": 1,
                           "error": "no package test command covers this file; set test_command in the case"})
+            tests[path] = False
             continue
+        if how in seen:
+            continue
+        seen.add(how)
         cmd, folder = how
         res = run(cmd, cwd=root / folder, timeout=timeout, env=env)
-        passed, total = parse_counts(res.stdout + "\n" + res.stderr, res.ok)
+        output = res.stdout + "\n" + res.stderr
+        passed, total = parse_counts(output, res.ok)
+        ids = test_ids(output, path)
+        if not ids:
+            ids = {path: res.ok}  # nothing named: the file is one test
+        elif not res.ok and all(ids.values()):
+            ids[f"{path}::(run)"] = False  # failed outside any named test (build, collection, setup)
+        tests.update(ids)
         files.append({"file": path, "ok": res.ok, "passed": passed, "total": total, "command": cmd,
                       "seconds": round(res.duration, 1)})
         log.append(f"$ (cd {folder} && {cmd})  -> exit {res.code}\n{res.tail(8000)}\n")
     passed = sum(f["passed"] for f in files)
     total = sum(f["total"] for f in files)
-    return {"files": files, "passed": passed, "total": total,
+    return {"files": files, "tests": tests, "passed": passed, "total": total,
             "rate": round(passed / total, 3) if total else None,
             "all_pass": bool(files) and all(f["ok"] for f in files)}, "\n".join(log)
+
+
+def against_check(hidden: dict[str, Any], check: dict[str, Any] | None) -> dict[str, Any]:
+    """Score per test against the case's check: fail-to-pass must pass, pass-to-pass must not break.
+
+    Without a check (or with no fail-to-pass tests in it), the per-file result stands."""
+    f2p = (check or {}).get("fail_to_pass") or []
+    if not f2p:
+        return {**hidden, "scored": "per file"}
+    p2p = (check or {}).get("pass_to_pass") or []
+    tests = hidden.get("tests") or {}
+    fixed = [t for t in f2p if tests.get(t)]
+    broken = [t for t in p2p if not tests.get(t)]
+    return {**hidden, "scored": "per test", "fail_to_pass": len(f2p), "fixed": len(fixed),
+            "pass_to_pass": len(p2p), "broken": broken[:50], "not_fixed": [t for t in f2p if not tests.get(t)][:50],
+            "passed": len(fixed), "total": len(f2p), "rate": round(len(fixed) / len(f2p), 3),
+            "all_pass": len(fixed) == len(f2p) and not broken}
+
+
+def classify(base: dict[str, bool], refs: list[dict[str, bool]]) -> dict[str, list[str]]:
+    """Fail-to-pass, pass-to-pass and flaky test ids from runs on base and (repeated) on the reference."""
+    ids = set().union(*refs) if refs else set()
+    flaky = sorted(t for t in ids if len({r.get(t, False) for r in refs}) > 1)
+    steady = [t for t in ids if t not in flaky and all(r.get(t) for r in refs)]
+    return {"fail_to_pass": sorted(t for t in steady if not base.get(t)),
+            "pass_to_pass": sorted(t for t in steady if base.get(t)),
+            "fails_on_reference": sorted(t for t in ids if t not in flaky and not any(r.get(t) for r in refs)),
+            "flaky": flaky}
 
 
 def score(case: Case, cfg: Config, root: Path, base: str, patch: str, mirror: Path, ref: str) -> tuple[dict[str, Any], str]:
     """Apply `patch` to a clean base in `root`, write the hidden tests over it, run them.
 
-    Returns (hidden result, log). `root` is left in the scored state."""
-    overlay, runnable = hidden_files(case, cfg, mirror, base, ref)
+    Returns (hidden result, log); scoring per test against the case's check is against_check's
+    job. `root` is left in the scored state."""
+    overlay = hidden_overlay(case, cfg, mirror, base, ref)
+    _, runnable = hidden_files(case, cfg, mirror, base, ref)
     workspace.reset(root, base, cfg)
     if patch.strip():
         p = subprocess.run(["git", "-C", str(root), "apply", "--binary", "--whitespace=nowarn", "-"],
                            input=patch.encode(), capture_output=True)
         if p.returncode != 0:
             err = p.stderr.decode(errors="replace")[:1500]
-            return {"files": [], "passed": 0, "total": len(runnable) or 1, "rate": 0.0, "all_pass": False,
-                    "error": f"the candidate patch does not apply: {err}"}, err
-    for path in overlay:
-        content = file_at(mirror, ref, path)
+            return {"files": [], "tests": {}, "passed": 0, "total": len(runnable) or 1, "rate": 0.0,
+                    "all_pass": False, "error": f"the candidate patch does not apply: {err}"}, err
+    for path, content in overlay.items():
         target = root / path
         if content is None:
             if target.exists():
@@ -187,7 +285,7 @@ def score(case: Case, cfg: Config, root: Path, base: str, patch: str, mirror: Pa
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
     if not runnable:
-        return {"files": [], "passed": 0, "total": 0, "rate": None, "all_pass": False,
+        return {"files": [], "tests": {}, "passed": 0, "total": 0, "rate": None, "all_pass": False,
                 "error": "the case has no runnable hidden tests"}, ""
     return run_hidden(case, cfg, root, runnable)
 

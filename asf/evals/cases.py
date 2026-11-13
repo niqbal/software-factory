@@ -14,6 +14,12 @@ A case is one YAML file:
       kind: bug                            # bug | feature | task | chore
     # Optional:
     hidden_tests: [tests/test_discount.py] # default: the test files the reference adds or changes
+    hidden_dir: invoice-discount/hidden    # authored hidden tests: files written over the candidate
+                                           # at the same relative paths (instead of the reference's)
+    reference_patch: invoice-discount/ref.diff  # a reference written for the eval, applied on base
+                                           # (instead of `reference`; kept in the archive only)
+    tags: [authored, edge-case]            # the report splits results by tag
+    reference_by: cursor                   # who wrote the reference: human, claude, cursor, ...
     test_command: "pytest -q {tests}"      # default: the owning package's test command
     setup: []                              # commands run in each fresh checkout
     deps_from: /Users/me/work/invoice      # copy execution.clone_dirs (e.g. .venv) from here
@@ -80,6 +86,10 @@ class Case:
     deps_from: str = ""
     config: Any = None
     notes: str = ""
+    hidden_dir: str = ""
+    reference_patch: str = ""
+    tags: list[str] = field(default_factory=list)
+    reference_by: str = ""
     path: Path | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -93,11 +103,25 @@ class Case:
             p = (self.path.parent / p)
         return p.resolve()
 
+    def _rel(self, value: str) -> Path:
+        p = Path(value).expanduser()
+        return p if p.is_absolute() or not self.path else (self.path.parent / p)
+
+    @property
+    def hidden_folder(self) -> Path | None:
+        return self._rel(self.hidden_dir) if self.hidden_dir else None
+
+    @property
+    def reference_patch_file(self) -> Path | None:
+        return self._rel(self.reference_patch) if self.reference_patch else None
+
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"id": self.id, "repo": self.repo, "base": self.base, "reference": self.reference,
+        d: dict[str, Any] = {"id": self.id, "repo": self.repo, "base": self.base,
+                             **({"reference": self.reference} if self.reference else {}),
                              "ticket": {"title": self.ticket.title, "body": self.ticket.body,
                                         "acceptance": list(self.ticket.acceptance), "kind": self.ticket.kind}}
-        for key in ("hidden_tests", "test_command", "setup", "deps_from", "config", "notes"):
+        for key in ("hidden_tests", "hidden_dir", "reference_patch", "test_command", "setup", "deps_from",
+                    "config", "tags", "reference_by", "notes"):
             value = getattr(self, key)
             if value:
                 d[key] = value
@@ -108,7 +132,9 @@ class Case:
 def parse_case(data: dict[str, Any], path: Path | None = None) -> Case:
     if not isinstance(data, dict):
         raise EvalError(f"{path}: a case must be a mapping")
-    missing = [k for k in ("repo", "base", "reference", "ticket") if not data.get(k)]
+    missing = [k for k in ("repo", "base", "ticket") if not data.get(k)]
+    if not data.get("reference") and not data.get("reference_patch"):
+        missing.append("reference (or reference_patch)")
     if missing:
         raise EvalError(f"{path or 'case'}: missing {', '.join(missing)}")
     t = data["ticket"]
@@ -120,18 +146,21 @@ def parse_case(data: dict[str, Any], path: Path | None = None) -> Case:
     if kind not in KINDS:
         raise EvalError(f"{path or 'case'}: ticket.kind must be one of {', '.join(KINDS)}")
     known = {"id", "repo", "base", "reference", "ticket", "hidden_tests", "test_command", "setup",
-             "deps_from", "config", "notes"}
+             "deps_from", "config", "notes", "hidden_dir", "reference_patch", "tags", "reference_by"}
     case_id = str(data.get("id") or (path.stem if path else ""))
     if not case_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", case_id):
         raise EvalError(f"{path or 'case'}: id must be letters, digits, '.', '_' or '-' (got {case_id!r})")
-    return Case(id=case_id, repo=str(data["repo"]), base=str(data["base"]), reference=str(data["reference"]),
+    return Case(id=case_id, repo=str(data["repo"]), base=str(data["base"]), reference=str(data.get("reference") or ""),
                 ticket=Ticket(title=str(t["title"]), body=str(t.get("body") or ""),
                               acceptance=[str(a) for a in t.get("acceptance") or []], kind=kind),
                 hidden_tests=[str(h) for h in data.get("hidden_tests") or []],
                 test_command=str(data.get("test_command") or ""),
                 setup=[str(s) for s in data.get("setup") or []],
                 deps_from=str(data.get("deps_from") or ""), config=data.get("config"),
-                notes=str(data.get("notes") or ""), path=path,
+                notes=str(data.get("notes") or ""), hidden_dir=str(data.get("hidden_dir") or ""),
+                reference_patch=str(data.get("reference_patch") or ""),
+                tags=[str(t) for t in data.get("tags") or []], reference_by=str(data.get("reference_by") or ""),
+                path=path,
                 extra={k: v for k, v in data.items() if k not in known})
 
 
