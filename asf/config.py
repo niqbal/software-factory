@@ -62,13 +62,13 @@ DEFAULTS: dict[str, Any] = {
         "tier_0": {"deterministic": ["secret_scan", "diff_size"], "llm": [],
                    "human_approvals": 0, "merge": "agent"},
         "tier_1": {"deterministic": ["secret_scan", "diff_size", "test_integrity", "dependency_policy",
-                                     "lint", "typecheck", "build", "test"],
+                                     "lint", "typecheck", "build", "test", "e2e"],
                    "llm": ["reviewer"], "human_approvals": 0, "merge": "agent"},
         "tier_2": {"deterministic": ["secret_scan", "diff_size", "test_integrity", "dependency_policy",
-                                     "lint", "typecheck", "build", "test"],
+                                     "lint", "typecheck", "build", "test", "e2e"],
                    "llm": ["reviewer", "security"], "human_approvals": 1, "merge": "agent_after_approval"},
         "tier_3": {"deterministic": ["secret_scan", "diff_size", "test_integrity", "dependency_policy",
-                                     "lint", "typecheck", "build", "test"],
+                                     "lint", "typecheck", "build", "test", "e2e"],
                    "llm": ["reviewer", "security"], "human_approvals": 1, "merge": "human"},
     },
     "limits": {
@@ -90,6 +90,15 @@ DEFAULTS: dict[str, Any] = {
     "delivery": {"provider": "local_git", "branch_prefix": "factory/", "draft": True},
     "observe": {"provider": "none"},
     "deploy": {"steps": []},
+    # The running application, for browser reproductions and the e2e suite. Empty: no app.
+    # The factory starts it in the job's sandbox (and in post-merge checkouts) and stops it after.
+    #   start: command; {port} is replaced by the port, which is also exported as PORT
+    #   port: 0 picks a free port each time
+    #   health: path (or URL) polled until it answers 2xx/3xx
+    "app": {"start": "", "port": 0, "health": "/", "start_timeout_s": 60},
+    # The reproducer: `claude -p` driving a browser through @playwright/mcp, and nothing else.
+    "repro": {"model": "claude-sonnet-5-5", "effort": "medium", "timeout_s": 900,
+              "e2e_dir": "tests/e2e", "mcp_command": ["npx", "-y", "@playwright/mcp@0.0.85"], "binary": ""},
     "permissions": {
         "protected_paths": [".github/**", ".gitlab-ci.yml", ".circleci/**", "factory.yaml",
                             "**/.env", "**/.env.*", "**/*.pem", "**/*.key"],
@@ -107,6 +116,11 @@ DEFAULTS: dict[str, Any] = {
                                       ".cursorrules", ".github/copilot-instructions.md"],
                 "max_instruction_chars": 12000},
 }
+
+
+# `e2e` is a deterministic browser suite run against the started app (ASF_APP_URL); `repro` is not
+# a shell command but the folder of English reproductions the reproducer agent runs.
+COMMAND_KINDS = {"setup", "lint", "typecheck", "build", "test", "coverage", "e2e", "repro"}
 
 
 class ConfigError(ValueError):
@@ -174,6 +188,22 @@ class Config:
     def is_test_path(self, path: str) -> bool:
         return any_match(path, self.test_globs)
 
+    @property
+    def app(self) -> dict[str, Any] | None:
+        """The app settings, or None when no `app.start` command is configured."""
+        app = self.get("app") or {}
+        return app if app.get("start") else None
+
+    def repro_dirs(self) -> list[tuple[Package, str]]:
+        """(package, folder) for every package that declares a `repro` suite folder."""
+        out = []
+        for p in self.packages:
+            folder = (p.commands.get("repro") or "").strip()
+            if folder:
+                root = "" if p.root in ("", ".") else p.root.rstrip("/") + "/"
+                out.append((p, root + folder.rstrip("/")))
+        return out
+
     def role_model(self, role: str) -> dict[str, Any]:
         roles = self.get("models.roles", {})
         spec = roles.get(role) or roles.get("implementer") or {"model": "claude-opus-5-5"}
@@ -198,7 +228,7 @@ def validate(raw: dict[str, Any]) -> list[str]:
             errors.append(f"duplicate package name {p['name']}")
         names.add(p.get("name"))
         for cmd in (p.get("commands") or {}):
-            if cmd not in {"setup", "lint", "typecheck", "build", "test", "coverage"}:
+            if cmd not in COMMAND_KINDS:
                 errors.append(f"packages[{p.get('name')}]: unknown command kind '{cmd}'")
     for tier in range(4):
         g = raw.get("gates", {}).get(f"tier_{tier}")
@@ -220,6 +250,14 @@ def validate(raw: dict[str, Any]) -> list[str]:
         seen.add(step["name"])
         if step.get("approval", "owner") not in ("owner", "auto"):
             errors.append(f"deploy step {step['name']}: approval must be owner | auto")
+    app = raw.get("app") or {}
+    if not isinstance(app, dict):
+        errors.append("app must be a mapping")
+    elif app.get("start"):
+        if not isinstance(app.get("port", 0), int) or not 0 <= app.get("port", 0) <= 65535:
+            errors.append("app.port must be 0 (pick a free port) or a port number")
+        if not isinstance(app.get("start_timeout_s", 60), (int, float)) or app.get("start_timeout_s", 60) <= 0:
+            errors.append("app.start_timeout_s must be a positive number")
     mmt = raw.get("autonomy", {}).get("max_merge_tier", -1)
     if not isinstance(mmt, int) or mmt < -1 or mmt > 3:
         errors.append("autonomy.max_merge_tier must be -1..3")

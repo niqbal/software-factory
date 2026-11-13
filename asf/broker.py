@@ -61,8 +61,13 @@ class BrokerState:
 class ToolBroker:
     def __init__(self, sandbox: Sandbox, cfg: Config, role: str, tier: int,
                  store: Store | None = None, job_id: str = "",
-                 on_event: Callable[[str, dict], None] | None = None):
+                 on_event: Callable[[str, dict], None] | None = None,
+                 protected_extra: list[str] | None = None,
+                 app_log: Path | None = None):
         self.sb, self.cfg, self.role, self.tier = sandbox, cfg, role, tier
+        # This job's reproduction files: committed before the fix, fixed for the rest of the job.
+        self.protected_extra = list(protected_extra or [])
+        self.app_log = app_log
         self.store, self.job_id = store, job_id
         self.on_event = on_event
         self.state = BrokerState()
@@ -121,6 +126,11 @@ class ToolBroker:
         self._check_read(rel)
         if any_match(rel, self.protected):
             raise Denied(f"{rel} is protected by permissions.protected_paths")
+        if rel in self.protected_extra:
+            raise Denied(f"{rel} is this job's reproduction, committed before the fix to prove the problem; "
+                         "it cannot change. If the fix must change what it relies on (selectors, page "
+                         "structure), call finish with blocked_reason 'repro test needs changing: <why>' so "
+                         "the owner can approve it")
         is_test = self.cfg.is_test_path(rel)
         existed = self.sb.file_at_base(rel) is not None
         if self.role in ("reviewer", "security"):
@@ -239,11 +249,21 @@ class ToolBroker:
         return pkgs[0]
 
     def t_run_check(self, kind: str, package: str = "", args: str = "") -> str:
-        if kind not in ("test", "lint", "typecheck", "build"):
-            raise Denied("kind must be test, lint, typecheck or build")
+        if kind not in ("test", "lint", "typecheck", "build", "e2e"):
+            raise Denied("kind must be test, lint, typecheck, build or e2e")
         pkg = self._package(package or None, kind)
         if args and (not SAFE_ARGS.match(args) or SHELL_META.search(args)):
             raise Denied("args may contain only paths, test names and simple flags")
+        if kind == "e2e":
+            # The factory starts the app in this sandbox for the run (ASF_APP_URL) and stops it after.
+            from .apprun import run_e2e
+            from .repro import e2e_dir
+            res = run_e2e(self.cfg, self.sb.root,
+                          lambda cmd, cwd: self.sb.exec(cmd, cwd=cwd, timeout=self.timeout),
+                          pkg, args or e2e_dir(self.cfg, pkg), self.app_log)
+            status = "PASSED" if res.ok else ("TIMED OUT" if res.timed_out else f"FAILED (exit {res.code})")
+            return f"$ e2e {args}  [app started by the factory]\n{status} in {res.duration:.0f}s\n" \
+                   f"{res.tail(MAX_OUTPUT_CHARS)}"
         template = pkg.commands[kind]
         command = template.replace("{args}", args) if "{args}" in template else \
             (template + (" " + args if args else ""))
@@ -315,7 +335,7 @@ def _all_specs(cfg: Config) -> list[ToolSpec]:
         ToolSpec("delete_file", "Delete a file.", _obj({"path": {"type": "string"}}, ["path"])),
         ToolSpec("run_check", f"Run a configured project command. Packages and commands: {pkg_note}. "
                               "args are appended (e.g. a test file path or -t 'name').",
-                 _obj({"kind": {"type": "string", "enum": ["test", "lint", "typecheck", "build"]},
+                 _obj({"kind": {"type": "string", "enum": ["test", "lint", "typecheck", "build", "e2e"]},
                        "package": {"type": "string"}, "args": {"type": "string"}}, ["kind"])),
         ToolSpec("run_command", "Run a read-only inspection command such as ls, git log or git diff.",
                  _obj({"command": {"type": "string"}, "cwd": {"type": "string"}}, ["command"])),

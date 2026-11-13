@@ -45,6 +45,9 @@ class ScriptedProvider(ModelProvider):
         super().__init__(settings or {}, ctx)
         self.scripts: dict[str, list[list[Any]]] = copy.deepcopy(self.settings.get("scripts", {}))
         self.structured_answers: dict[str, dict[str, Any]] = self.settings.get("structured", {})
+        # Reproducer answers, in order: a dict, or a callable(request) -> dict.
+        self.repro_answers: list[Any] = list(self.settings.get("reproducer", []))
+        self.repro_requests: list[Any] = []
         self.log: list[tuple[str, str]] = []
 
     def conversation(self, model: str, system: str, tools: list[ToolSpec],
@@ -60,3 +63,15 @@ class ScriptedProvider(ModelProvider):
         self.log.append((role, model))
         answer = self.structured_answers.get(role, {})
         return copy.deepcopy(answer), ModelTurn("", [], "end_turn", {"input": 10, "output": 10}, 0.0001, "scripted")
+
+    def reproduce(self, req: Any) -> tuple[dict[str, Any], ModelTurn]:
+        """Stands in for the browser reproducer (asf.repro.ClaudeReproducer)."""
+        self.log.append(("reproducer", req.mode))
+        self.repro_requests.append(req)
+        if not self.repro_answers:
+            raise RuntimeError("scripted reproducer has no answer left")
+        answer = self.repro_answers.pop(0)
+        answer = answer(req) if callable(answer) else copy.deepcopy(answer)
+        out = {"reproduced": False, "measurements": [], "notes": "", "screenshots": [], "test_source": "",
+               **answer}
+        return out, ModelTurn("", [], "end_turn", {"input": 100, "output": 50}, 0.002, "scripted")

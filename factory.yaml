@@ -23,6 +23,18 @@ packages:
     # `python -m` puts the sandbox first on sys.path, so tests import the sandbox's asf,
     # not the editable install the running factory uses.
     test: .venv/bin/python -m pytest -q {args}
+    # Browser suites. e2e: pytest-playwright against the app the factory starts ({args} is
+    # tests/e2e or one test file). repro: the folder of English reproductions an agent runs.
+    e2e: .venv/bin/python -m pytest -q -p no:cacheprovider {args}
+    repro: tests/repro
+
+# The app browser checks run against: a console with demo data (one job with a long diff), built
+# in a temporary folder from the checkout under test. Nothing under ~/.asf is touched.
+app:
+  start: .venv/bin/python -m asf.demo --port {port}
+  port: 0
+  health: /api/health
+  start_timeout_s: 30
 
 # Work items: Markdown files with YAML front matter in ~/.asf/<project>/inbox, or `asf add`.
 intake:

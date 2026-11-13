@@ -22,7 +22,7 @@ LOCKFILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", 
              "go.sum", "Gemfile.lock", "composer.lock", "uv.lock", "bun.lockb"}
 CODE_EXT = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".kt",
             ".rb", ".php", ".cs", ".swift", ".scala", ".c", ".cc", ".cpp", ".h"}
-COMMAND_GATES = ("lint", "typecheck", "build", "test")
+COMMAND_GATES = ("lint", "typecheck", "build", "test", "e2e")
 
 FAIL_PATTERNS = [
     re.compile(r"^\s*FAIL\s+(\S+)", re.M),                          # jest / vitest file
@@ -84,8 +84,11 @@ DEP_PARSERS: dict[str, Callable[[str | None], set[str]]] = {
 class GateRunner:
     def __init__(self, cfg: Config, sandbox: Sandbox, tier: int, state_dir: Path,
                  base_sandbox: Callable[[], Sandbox] | None = None,
-                 log: Callable[[str, dict], None] | None = None):
+                 log: Callable[[str, dict], None] | None = None,
+                 protected: dict[str, str] | None = None):
         self.cfg, self.sb, self.tier, self.state_dir = cfg, sandbox, tier, state_dir
+        # Files that must stay exactly as committed (this job's reproduction), path -> content.
+        self.protected = protected or {}
         self.base_sandbox = base_sandbox
         self.log = log or (lambda *_: None)
         self.timeout = cfg.get("execution.command_timeout_s", 900)
@@ -140,6 +143,13 @@ class GateRunner:
                 kept = len(re.findall(r"\b(expect|assert|should)\b", current.read_text(errors="replace")))
                 if kept < removed:
                     problems.append(f"{path} lost {removed - kept} assertions")
+        for path, content in self.protected.items():
+            current = self.sb.root / path
+            if not current.exists():
+                problems.append(f"deleted the reproduction {path} (committed before the fix)")
+            elif current.read_text(errors="replace") != content:
+                problems.append(f"modified the reproduction {path} (committed before the fix; changing it "
+                                "needs the owner's approval)")
         code_changed = [p for p in changed if is_code(p) and not self.cfg.is_test_path(p)]
         tests_changed = [p for p in changed if self.cfg.is_test_path(p)]
         if (self.cfg.get("limits.require_tests_for_code_changes", True) and self.tier >= 1
@@ -192,17 +202,30 @@ class GateRunner:
         results = [coverage_result] if coverage_result else []
         for pkg in pkgs:
             cmd = pkg.commands[kind].replace("{args}", "").strip()
-            res = self.sb.exec(cmd, cwd=pkg.root, timeout=self.timeout)
+            res = self._exec(kind, self.sb, pkg)
+            if kind == "e2e" and res.code == 5 and not res.timed_out:
+                results.append(GateResult(kind, "skipped", "no e2e tests collected", package=pkg.name))
+                continue
             if res.ok:
                 results.append(GateResult(kind, "pass", f"{cmd} ({res.duration:.0f}s)", package=pkg.name))
                 continue
-            results.append(self._compare_with_base(kind, pkg.name, pkg.root, cmd, res))
+            results.append(self._compare_with_base(kind, pkg, cmd, res))
         return results
 
-    def _compare_with_base(self, kind: str, pkg: str, root: str, cmd: str, res: ExecResult) -> GateResult:
+    def _exec(self, kind: str, sb: Sandbox, pkg) -> ExecResult:
+        if kind != "e2e":
+            return sb.exec(pkg.commands[kind].replace("{args}", "").strip(), cwd=pkg.root, timeout=self.timeout)
+        # The e2e suite runs against the app, started in the checkout under test.
+        from .apprun import run_e2e
+        from .repro import e2e_dir
+        return run_e2e(self.cfg, sb.root, lambda cmd, cwd: sb.exec(cmd, cwd=cwd, timeout=self.timeout),
+                       pkg, e2e_dir(self.cfg, pkg), self.state_dir / "app-logs" / f"gate-{sb.root.name}.log")
+
+    def _compare_with_base(self, kind: str, package, cmd: str, res: ExecResult) -> GateResult:
+        pkg = package.name
         if res.timed_out:
             return GateResult(kind, "fail", f"{cmd} timed out", res.tail(4000), pkg)
-        base = self._baseline(root, cmd)
+        base = self._baseline(kind, package, cmd)
         if base is None:
             return GateResult(kind, "fail", f"{cmd} failed (exit {res.code})", res.tail(4000), pkg)
         now_ids = failing_ids(res.stdout + "\n" + res.stderr)
@@ -218,15 +241,15 @@ class GateRunner:
                                             "parsed to tell them apart", res.tail(4000), pkg)
         return GateResult(kind, "fail", f"{cmd}: {len(new)} new failures: {sorted(new)[:8]}", res.tail(4000), pkg)
 
-    def _baseline(self, root: str, cmd: str) -> dict | None:
+    def _baseline(self, kind: str, package, cmd: str) -> dict | None:
         if not self.base_sandbox:
             return None
         cache_path = self.state_dir / "baseline" / f"{self.sb.base_sha}.json"
         cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
-        key = f"{root}::{cmd}"
+        key = f"{package.root}::{cmd}"
         if key not in cache:
             base_sb = self.base_sandbox()
-            res = base_sb.exec(cmd, cwd=root, timeout=self.timeout)
+            res = self._exec(kind, base_sb, package)
             cache[key] = {"ok": res.ok, "ids": sorted(failing_ids(res.stdout + "\n" + res.stderr)),
                           "tail": res.tail(1500)}
             cache_path.parent.mkdir(parents=True, exist_ok=True)

@@ -42,9 +42,11 @@ class WorkItem:
 STATES = [
     "queued",             # waiting for triage
     "triaged",            # tier guessed, acceptance criteria fixed, sandbox not yet created
+    "reproducing",        # bug/feature with an app: prove the problem on base in a browser, commit the repro
     "implementing",
     "testing",            # independent tester
     "verifying",          # deterministic gates, CI fixer on failure
+    "confirming",         # browser repros: this job's must be gone, the ones its paths cover must stay gone
     "reviewing",          # LLM reviewers required by the tier
     "committing",
     "delivering",         # branch / draft PR

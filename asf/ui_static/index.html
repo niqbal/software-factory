@@ -66,6 +66,8 @@ main{display:grid;grid-template-columns:minmax(0,430px) minmax(0,1fr);gap:14px;p
 .callout{border-radius:8px;padding:10px 12px;margin-bottom:14px;white-space:pre-wrap}
 .callout.bad{background:var(--bad-bg)} .callout.warn{background:var(--warn-bg)} .callout.violet{background:var(--violet-bg)} .callout.ok{background:var(--ok-bg)}
 table{border-collapse:collapse;width:100%;font-size:13px}
+.shots{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px} .shots img{max-width:220px;max-height:140px;border:1px solid var(--line);border-radius:6px}
+.repro td{vertical-align:top}
 td,th{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top}
 pre,code{font-family:var(--mono);font-size:12px}
 pre{margin:0;white-space:pre-wrap;word-break:break-word;max-width:100%;overflow-x:auto}
@@ -250,6 +252,7 @@ const ACTION = {
   revise:  ['Send back with notes', '', 'The implementer works on top of this branch to address your notes.'],
   resume:  ['Resume', 'primary', 'Continues where it paused, with more time.'],
   answer:  ['Answer', 'primary', 'Answer the question; the job continues with your answer.'],
+  allow_repro_edit: ['Allow test change', 'primary', 'Lets the implementer change the reproduction test (it must still fail on the code before the fix), then retries.'],
   retry:   ['Retry', 'primary', 'Re-enters at the step that stopped (gates rerun on the same work).'],
   run:     ['Run now', '', 'Runs this job until it finishes or stops.'],
   rerun:   ['Start over', '', 'Cancels this job and starts the item again from the current default branch.'],
@@ -315,6 +318,8 @@ function overview() {
   if (D.state === 'awaiting_deploy' && dp) parts.push(`<div class="callout ok"><b>Merged and verified, not live yet.</b> Deploying runs ${esc((dp.steps||[]).join(', '))} on ${esc(S.default_branch)} (${esc((dp.sha||'').slice(0,10))} when checked). The job is done once the deploy passes.</div>${dp.preview ? `<div class="sec"><h4>What would go live</h4><pre>${esc(dp.preview)}</pre></div>` : ''}`);
   if (dp && dp.results?.length) parts.push(`<div class="sec"><h4>Deploy</h4>${dp.results.map(r => `<p><span class="chip ${r.status==='pass'?'ok':'bad'}">${esc(r.status)}</span> <b>${esc(r.name)}</b> at ${esc((r.sha||'').slice(0,10))}, ${esc(r.seconds)} s${dp.approved_by ? ' · approved by ' + esc(dp.approved_by) : ''}</p><pre>${esc(r.output)}</pre>`).join('')}</div>`);
   if (d.post_merge) parts.push(`<div class="sec"><h4>Post-merge checks</h4><span class="chip ${d.post_merge.status==='pass'?'ok':'bad'}">${esc(d.post_merge.status)}</span>${d.post_merge.detail ? `<pre style="margin-top:6px">${esc(d.post_merge.detail)}</pre>` : ''}</div>`);
+  const ev = reproEvidence(d);
+  if (ev) parts.push(ev);
   if (d.gates?.length) parts.push(`<div class="sec"><h4>Gates</h4><table>${d.gates.map(g => `<tr><td>${esc(g.name)}</td><td>${chip(g.status==='pass'?'done':g.status==='fail'?'failed':'queued').replace(/>[^<]+</, '>' + esc(g.status) + '<')}</td><td>${esc(g.detail)}</td></tr>`).join('')}</table></div>`);
   const rv = d.reviews || {};
   if (Object.keys(rv).length) parts.push(`<div class="sec"><h4>Reviews</h4>${Object.entries(rv).map(([r, v]) => `<p><b>${esc(r)}</b>: ${esc(v.verdict)}. ${esc(v.summary || '')}</p>`).join('')}</div>`);
@@ -322,6 +327,32 @@ function overview() {
   const cost = Object.entries(D.cost_by_role).map(([r, c]) => `${r} ${money(c)}${D.backend_by_role?.[r] ? ' (' + esc(D.backend_by_role[r]) + ')' : ''}`).join(' · ');
   parts.push(`<div class="hint">Cost: ${cost || '–'}${d.branch ? ' · branch <code>' + esc(d.branch) + '</code>' : ''}</div>`);
   return parts.join('') || '<div class="hint">No details yet.</div>';
+}
+
+// Evidence of a browser reproduction: the English steps run by an agent in a real browser, and the
+// Playwright test it wrote. Both must show the problem on the base commit and not after the fix.
+function reproEvidence(d) {
+  const r = d.repro, checks = d.repro_checks || [];
+  if (!r && !checks.length) return '';
+  const url = s => pa('/jobs/' + D.id + '/evidence/' + s.split('/').map(encodeURIComponent).join('/'));
+  const shots = res => (res?.screenshots || []).length ? `<div class="shots">${res.screenshots.map(s => `<a href="${url(s)}" target="_blank"><img src="${url(s)}" alt="${esc(s)}" title="${esc(s)}"></a>`).join('')}</div>` : '';
+  const meas = res => (res?.measurements || []).map(m => `<div><code>${esc(m.name)}</code> = <b>${esc(m.value)}</b> <span class="hint">(expected ${esc(m.expected)})</span></div>`).join('');
+  const shows = res => res?.reproduced;
+  const browser = (res, after) => !res ? '<span class="hint">not run yet</span>' :
+    `<span class="chip ${after ? (shows(res) ? 'bad' : 'ok') : (shows(res) ? 'warn' : 'bad')}">${esc(res.verdict)}</span>${meas(res)}${res.notes ? `<div class="hint">${esc(res.notes)}</div>` : ''}${shots(res)}`;
+  const test = (t, after) => !t ? '<span class="hint">not run yet</span>' :
+    `<span class="chip ${after ? (t.status === 'pass' ? 'ok' : 'bad') : (t.kind === 'assertion' ? 'warn' : 'bad')}">${t.status === 'pass' ? 'passes' : 'fails: ' + esc(t.kind)}</span><div class="hint">${esc((t.detail || '').slice(0, 400))}</div>`;
+  const out = [];
+  if (r) {
+    const base = (r.test_on_base || []).slice(-1)[0], after = r.after || {};
+    out.push(`<div class="sec"><h4>Reproduction (${esc(r.kind === 'feature' ? 'missing behaviour' : 'bug')})</h4>
+      <p class="hint"><code>${esc(r.md)}</code> (English steps, run by an agent in a real browser) and <code>${esc(r.test)}</code> (the Playwright test it wrote)${r.commit ? ', committed before the fix as ' + esc(r.commit.slice(0, 10)) : ''}.${r.edit_approved ? ' The owner allowed the test to change: ' + esc(r.edit_approved.reason || '') : ''}</p>
+      <table class="repro"><tr><th></th><th>Base commit (must show it)</th><th>After the fix (must not)</th></tr>
+      <tr><td>Browser</td><td>${browser(r.base, false)}</td><td>${browser(after.browser, true)}</td></tr>
+      <tr><td>e2e test</td><td>${test(base, false)}${(r.test_on_base || []).length > 1 ? '<div class="hint">regenerated once</div>' : ''}</td><td>${test(after.e2e, true)}${after.test_on_base ? '<div class="hint">edited test on base: ' + esc(after.test_on_base.kind) + '</div>' : ''}</td></tr></table></div>`);
+  }
+  if (checks.length) out.push(`<div class="sec"><h4>Reproductions this change covers</h4>${checks.map(c => `<p><code>${esc(c.md)}</code> ${browser(c.result, true)}</p>`).join('')}</div>`);
+  return out.join('');
 }
 
 function renderDetail() {

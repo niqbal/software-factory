@@ -51,6 +51,6 @@ def commands(cfg: Config) -> str:
     lines = []
     for p in cfg.packages:
         for kind, cmd in sorted(p.commands.items()):
-            if kind != "setup":
+            if kind not in ("setup", "repro"):  # repro is a folder the reproducer runs, not a command
                 lines.append(f"- package {p.name} (root {p.root}, owns {', '.join(p.triggers)}): {kind} -> {cmd}")
     return "\n".join(lines) or "- none configured"

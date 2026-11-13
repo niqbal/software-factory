@@ -24,7 +24,7 @@ import yaml
 
 from . import metrics
 from .models import TERMINAL, WAITING
-from .orchestrator import Factory
+from .orchestrator import REPRO_EDIT, Factory
 from .util import git, run
 
 RUNNABLE_SKIP = TERMINAL | WAITING | {"paused"}
@@ -289,12 +289,24 @@ class Console:
         keep = ("needs_human_reason", "paused_reason", "error", "feedback", "manual_verification", "gates",
                 "reviews", "owner_review", "delivery", "post_merge", "deploy", "post_deploy", "acceptance",
                 "acceptance_met", "implementer", "tester", "branch", "delivered_at", "merged_at", "done_at",
-                "merged_by", "outcome", "triage", "answers", "question_posted", "unresolved_review")
+                "merged_by", "outcome", "triage", "answers", "question_posted", "unresolved_review",
+                "repro", "repro_checks", "repro_plan")
         return {"id": job_id, "item": item[0], "title": item[1], "state": j["state"], "tier": j["tier"],
                 "created": j["created"], "updated": j["updated"], "running": self.job_running(job_id),
                 "data": {k: d.get(k) for k in keep}, "report": report, "cost_by_role": by_role,
                 "backend_by_role": backend_by_role, "events": events,
                 "diff": self.diff(j), "actions": self.actions(j)}
+
+    def evidence(self, job_id: str, rel: str) -> tuple[bytes, str]:
+        """A screenshot the reproducer took for a job (under state/evidence/<job>/)."""
+        base = (self.f.state_dir / "evidence" / job_id).resolve()
+        target = (base / rel).resolve()
+        if not str(target).startswith(str(base) + os.sep) or not target.is_file():
+            raise KeyError(rel)
+        ctype = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(target.suffix.lower())
+        if not ctype:
+            raise KeyError(rel)
+        return target.read_bytes(), ctype
 
     def diff(self, j: dict[str, Any]) -> dict[str, Any]:
         d = j["data"]
@@ -328,6 +340,8 @@ class Console:
             acts += ["resume", "reject"]
         if s == "needs_human" and is_question(j["data"]):
             acts += ["answer"]
+        if s == "needs_human" and (j["data"].get("needs_human_reason") or "").startswith(REPRO_EDIT):
+            acts += ["allow_repro_edit"]
         if s in ("needs_human", "failed"):
             acts += ["retry", "reject"]
         if s not in TERMINAL and s not in WAITING and s != "paused" and not self.job_running(j["id"]):
@@ -371,6 +385,10 @@ class Console:
             msg = f.answer(job_id, body.get("text", ""), by=by)
             self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
             return msg
+        if action == "allow_repro_edit":
+            state = f.allow_repro_edit(job_id, by=by)
+            self.background(f"run {job_id}", lambda: self.run_guarded(job_id))
+            return f"the implementer may change the reproduction test; retrying from {state}"
         if action == "retry":
             state = f.retry(job_id)
             f.store.update_job(job_id, extra_minutes=f.store.job(job_id)["data"].get("extra_minutes", 0) + 600)
@@ -641,7 +659,8 @@ def make_handler(portfolio: Portfolio):
             return
 
         def _send(self, code: int, body: Any, ctype: str = "application/json") -> None:
-            data = body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode()
+            data = body if isinstance(body, bytes) else body.encode() if isinstance(body, str) \
+                else json.dumps(body, default=str).encode()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -667,6 +686,9 @@ def make_handler(portfolio: Portfolio):
                         return self._send(200, c.state())
                     if parts[3] == "jobs" and len(parts) == 5:
                         return self._send(200, c.job_detail(parts[4]))
+                    if parts[3] == "jobs" and len(parts) > 6 and parts[5] == "evidence":
+                        data, ctype = c.evidence(parts[4], "/".join(parts[6:]))
+                        return self._send(200, data, ctype)
             except KeyError as e:
                 return self._send(404, {"error": f"not found: {e}"})
             except Exception as e:  # noqa: BLE001

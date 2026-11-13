@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import limits, policy
+from . import repro as repro_mod
 from .adapters import base as adapters
 from .adapters.base import AdapterContext, ModelProvider, Sandbox
+from .apprun import classify, run_e2e, run_e2e_in, running_app, suite_ok
 from .agents.roles import BudgetExceeded, PromptBuilder, run_agent, work_item_block
 from .broker import ToolBroker
 from .config import Config
@@ -39,15 +41,32 @@ TRIAGE_SCHEMA = {
         "reason_if_not": {"type": "string"},
         "clarification_needed": {"type": "string"},
         "manual_verification": {"type": "array", "items": {"type": "string"}},
+        "repro": {
+            "type": "object",
+            "properties": {
+                "applicable": {"type": "boolean"},
+                "kind": {"type": "string", "enum": ["bug", "feature", ""]},
+                "path": {"type": "string"},
+                "steps": {"type": "array", "items": {"type": "string"}},
+                "expected": {"type": "string"},
+                "measure": {"type": "array", "items": {"type": "string"}},
+                "covers": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["applicable", "kind", "path", "steps", "expected", "measure", "covers"],
+            "additionalProperties": False,
+        },
     },
     "required": ["summary", "acceptance_criteria", "likely_paths", "tier_guess", "automatable",
-                 "reason_if_not", "clarification_needed", "manual_verification"],
+                 "reason_if_not", "clarification_needed", "manual_verification", "repro"],
     "additionalProperties": False,
 }
 MONTH = 30 * 24 * 3600
 # Stops that ask the requester something (a reply continues the job), as opposed to stops for
 # the owner (gates, post-merge) or unfinished attempts (retried on their own).
-QUESTION_PREFIXES = ("clarification needed", "implementer blocked", "not automatable")
+QUESTION_PREFIXES = ("clarification needed", "implementer blocked", "not automatable", "bug not understood",
+                     "feature not understood")
+# The implementer's fix needs this job's committed reproduction changed: only the owner may allow it.
+REPRO_EDIT = "repro test needs changing"
 # Hidden in comments the factory posts, so it never reads its own comments as replies.
 MARKER = "<!-- asf:{kind} {job} -->"
 # Errors worth one more try without a human: the backend or network hiccuped, the work didn't.
@@ -62,8 +81,10 @@ class Factory:
     def __init__(self, repo: Path, cfg: Config, state_dir: Path, store: Store,
                  provider: ModelProvider | None = None,
                  secrets: Callable[[str], str | None] | None = None,
-                 echo: Callable[[str], None] | None = None):
+                 echo: Callable[[str], None] | None = None,
+                 reproducer: repro_mod.Reproducer | None = None):
         self.repo, self.cfg, self.state_dir, self.store = repo, cfg, state_dir, store
+        self._reproducer = reproducer
         self.echo = echo or (lambda msg: None)
         ctx_kwargs: dict[str, Any] = {"repo": repo, "state_dir": state_dir, "config": cfg, "store": store}
         if secrets:
@@ -87,6 +108,15 @@ class Factory:
             m = self.cfg.get("models")
             self._provider = adapters.load("models", m.get("provider", "anthropic"))(m, self.ctx)
         return self._provider
+
+    @property
+    def reproducer(self) -> repro_mod.Reproducer:
+        """Runs English reproductions in a browser: the scripted provider in tests, else Claude Code
+        with @playwright/mcp as its only tool server."""
+        if self._reproducer is None:
+            self._reproducer = self.provider if hasattr(self.provider, "reproduce") \
+                else repro_mod.ClaudeReproducer(self.cfg)
+        return self._reproducer
 
     def intake_adapters(self) -> dict[str, adapters.IntakeAdapter]:
         out = {}
@@ -140,13 +170,17 @@ class Factory:
         return jobs
 
     # ----------------------------------------------------------------- run ---
-    MODEL_STATES = {"queued", "implementing", "testing", "verifying", "reviewing"}
+    MODEL_STATES = {"queued", "reproducing", "implementing", "testing", "verifying", "confirming", "reviewing"}
 
     def require_model(self) -> None:
         """Refuse to start model work without credentials (ValueError, nothing changed)."""
         problem = self.provider.credentials_problem()
         if problem:
             raise ValueError(f"model credentials missing: {problem}")
+        check = getattr(self.reproducer, "credentials_problem", None) if self.cfg.app else None
+        problem = check() if check else None
+        if problem:
+            raise ValueError(f"reproducer unavailable: {problem}")
 
     def run_job(self, job_id: str, stop_at: str | None = None) -> str:
         if self.store.job(job_id)["state"] in self.MODEL_STATES and \
@@ -211,10 +245,11 @@ class Factory:
             else:
                 # A fresh attempt starts from the base commit, not from a half-finished one. During a
                 # revision the base is the delivered commit: the work already on the branch is kept.
-                sb.reset(revision["from_commit"] if revision else None)
+                # The job's reproduction, committed before the fix, stays.
+                sb.reset(revision["from_commit"] if revision else (job["data"].get("repro") or {}).get("commit"))
                 self.store.event(job_id, "sandbox.reset", "factory", {"reason": "retry"})
         self.store.update_job(job_id, target, error="", needs_human_reason="", feedback="",
-                              tester_rounds=0, review_rounds=0, ci_rounds=0, failed_state="",
+                              tester_rounds=0, review_rounds=0, ci_rounds=0, confirm_rounds=0, failed_state="",
                               incomplete=False, partial_work=partial,
                               **({} if auto else {"auto_retries": 0, "auto_retry_exhausted": False}))
         return target
@@ -512,7 +547,9 @@ class Factory:
     def _agent(self, job: dict[str, Any], role: str, task: str, tier: int) -> AgentResult:
         self._check_budget(job["id"])
         sb = self._sandbox(job)
-        broker = ToolBroker(sb, self.cfg, role, tier, self.store, job["id"])
+        broker = ToolBroker(sb, self.cfg, role, tier, self.store, job["id"],
+                            protected_extra=self._repro_protected(job),
+                            app_log=self.state_dir / "app-logs" / f"{job['id']}-{role}.log")
         system = self.prompts(sb).system(role, tier)
         self.store.event(job["id"], "agent.start", role, {"tier": tier,
                                                           "model": self.cfg.role_model(role).get("model")})
@@ -641,8 +678,12 @@ class Factory:
         pre = policy.pre_tier(self.cfg, item, triage.get("tier_guess"))
         acceptance = item.acceptance or triage.get("acceptance_criteria", [])
         self.store.event(job["id"], "triage", "triage", triage)
+        plan, why_not = self._repro_plan(item, triage)
         self.store.update_job(job["id"], "triaged", tier=None, pre_tier=pre, triage=triage,
-                              acceptance=acceptance, manual_verification=triage.get("manual_verification", []))
+                              acceptance=acceptance, manual_verification=triage.get("manual_verification", []),
+                              repro_plan=plan)
+        if why_not and (triage.get("repro") or {}).get("applicable"):
+            self.store.event(job["id"], "repro.skipped", "factory", {"reason": why_not})
         if not triage.get("automatable", True):
             self._needs_human(self.store.job(job["id"]), f"not automatable: {triage.get('reason_if_not')}")
         elif _real_question(triage.get("clarification_needed")):
@@ -654,7 +695,11 @@ class Factory:
         branch = f"{prefix}{slugify(item.title, 32)}-{job['id'].split('-')[-1]}"
         base_ref = job["data"].get("base_ref") or self.cfg.default_branch
         sb = self.sandboxes.create(job["id"], base_ref, branch)
-        self.store.update_job(job["id"], "implementing", sandbox=sb.describe(), branch=branch)
+        # A bug or feature the app can show is reproduced on the base commit before anyone fixes it.
+        reproduce = job["data"].get("repro_plan") and not (job["data"].get("repro") or {}).get("commit") \
+            and not self._active_revision(job)
+        self.store.update_job(job["id"], "reproducing" if reproduce else "implementing",
+                              sandbox=sb.describe(), branch=branch)
 
     def _task(self, job: dict[str, Any], extra: str = "") -> str:
         item = self._item(job)
@@ -673,6 +718,7 @@ class Factory:
                      "with the work. Its unfinished changes are still in the working tree, in these files:\n"
                      + listed + "\nRead them first. Keep what is right, fix what is not, and finish the "
                      "task from there; do not start over.")
+        text += self._repro_brief(job)
         feedback = job["data"].get("feedback")
         if feedback:
             text += "\n\nThe previous attempt needs changes. Address these findings:\n" + feedback
@@ -684,12 +730,19 @@ class Factory:
         if job["data"].get("partial_work"):
             self.store.update_job(job["id"], partial_work=[])  # handed over; later rounds don't repeat it
         if res.data.get("blocked_reason"):
+            reason = str(res.data["blocked_reason"]).strip()
+            if reason.lower().startswith(REPRO_EDIT) and job["data"].get("repro"):
+                # Not a question for the requester: the owner decides whether the test may change.
+                return self._needs_human(job, REPRO_EDIT + reason[len(REPRO_EDIT):])
             # Blocked on its own initiative it needs a human. Blocked only after the factory
             # nudged it to finish, it was cut short: a fresh attempt may get through.
             return self._needs_human(job, f"implementer blocked: {res.data['blocked_reason']}",
                                      incomplete=bool(res.data.get("nudged")))
         sb = self._sandbox(job)
         changed = sb.uncommitted_files() if self._active_revision(job) else sb.changed_files()
+        # The reproduction committed before the fix is not the implementer's work.
+        repro_files = set((job["data"].get("repro") or {}).get("files") or [])
+        changed = [c for c in changed if c not in repro_files]
         if not changed:
             # Nothing was produced and nobody was asked anything: the attempt just did not finish.
             return self._needs_human(job, f"implementer made no changes: {res.summary[:500]}",
@@ -724,17 +777,18 @@ class Factory:
         decision = policy.decide(self.cfg, tier, manual_checks=job["data"].get("manual_verification", []))
         runner = GateRunner(self.cfg, sb, tier, self.state_dir,
                             base_sandbox=lambda: self.sandboxes.base_checkout(sb.base_sha),
-                            log=self._log(job["id"]))
+                            log=self._log(job["id"]), protected=self._repro_contents(job, sb))
         results = runner.run(decision.deterministic)
         failed = [r for r in results if r.blocking]
         gate_rows = [r.__dict__ for r in results]
         self.store.update_job(job["id"], tier=tier, decision=decision.as_dict(), gates=gate_rows,
                               changed=changed)
         if not failed:
-            self.store.update_job(job["id"], "reviewing")
+            confirm = bool(self.cfg.app) and (job["data"].get("repro") or self._covering(job, sb, changed))
+            self.store.update_job(job["id"], "confirming" if confirm else "reviewing")
             return
         rounds = job["data"].get("ci_rounds", 0)
-        fixable = [r for r in failed if r.name in ("lint", "typecheck", "build", "test")]
+        fixable = [r for r in failed if r.name in ("lint", "typecheck", "build", "test", "e2e")]
         if fixable and rounds < self.cfg.get("limits.ci_fix_rounds", 1):
             logs = "\n\n".join(f"Gate {r.name} ({r.package}) failed: {r.detail}\n{r.log}" for r in fixable)
             res = self._agent(self.store.job(job["id"]), "ci_fixer", self._task(job, logs), tier)
@@ -747,6 +801,315 @@ class Factory:
         # (often after a human changed policy, e.g. a diff limit), and no model spend is repeated.
         self.store.update_job(job["id"], failed_state="verifying")
         self._needs_human(self.store.job(job["id"]), f"gates failed: {summary}")
+
+    # ---------------------------------------------------------- reproduction --
+    def _repro_package(self, plan: dict[str, Any] | None = None) -> Any:
+        """The package whose repro and e2e suites a reproduction goes in: the one owning the
+        paths it covers, else the first that has both."""
+        pkgs = [p for p in self.cfg.packages if p.commands.get("repro") and p.commands.get("e2e")]
+        covers = (plan or {}).get("covers") or []
+        for p in pkgs:
+            if any(p.owns(c.replace("**", "x").replace("*", "x")) for c in covers):
+                return p
+        return pkgs[0] if pkgs else None
+
+    def _repro_plan(self, item: WorkItem, triage: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+        """The reproduction to run before the fix, or (None, why not)."""
+        plan = triage.get("repro") or {}
+        kind = item.kind if item.kind in ("bug", "feature") else plan.get("kind")
+        if not plan.get("applicable") or not plan.get("steps"):
+            return None, "triage found no browser steps"
+        if kind not in ("bug", "feature"):
+            return None, f"a {item.kind} is not reproduced"
+        if not self.cfg.app:
+            return None, "no app is configured (app.start in factory.yaml)"
+        if not self._repro_package(plan):
+            return None, "no package declares both a repro folder and an e2e command"
+        return {**plan, "kind": kind}, ""
+
+    def _repro_protected(self, job: dict[str, Any]) -> list[str]:
+        return list((job["data"].get("repro") or {}).get("protected") or [])
+
+    def _repro_contents(self, job: dict[str, Any], sb: Sandbox) -> dict[str, str]:
+        """The protected reproduction files as committed before the fix (for test_integrity)."""
+        r = job["data"].get("repro") or {}
+        out = {}
+        for path in self._repro_protected(job):
+            res = run(["git", "-C", str(sb.root), "show", f"{r['commit']}:{path}"], shell=False)
+            if res.ok:
+                out[path] = res.stdout
+        return out
+
+    def _repro_brief(self, job: dict[str, Any]) -> str:
+        r = job["data"].get("repro")
+        if not r or not r.get("commit"):
+            return ""
+        what = "bug" if r.get("kind") == "bug" else "missing behaviour"
+        seen = "; ".join(f"{m.get('name')} = {m.get('value')} (expected {m.get('expected')})"
+                         for m in (r.get("base") or {}).get("measurements") or [])
+        text = (f"\n\nThe {what} was reproduced on the current code before you started, and the reproduction is "
+                f"committed on this branch:\n- {r['md']}: the English steps, run in a real browser"
+                + (f" (measured: {seen})" if seen else "") + f"\n- {r['test']}: a Playwright test of the same "
+                f"thing. It fails now by its assertion.\nYour fix is done when that test passes (run_check with "
+                f"kind e2e and args {r['test']}; the factory starts the app for it) and the {what} no longer "
+                "shows in the browser; the factory checks both.")
+        approved = r.get("edit_approved")
+        if approved:
+            text += (f"\nThe owner approved changing the reproduction ({approved.get('reason', '')}). You may edit "
+                     f"{r['test']} for that, but keep it checking the same measurement; the factory re-runs it on "
+                     "the code before your fix, where it must still fail by its assertion.")
+        else:
+            text += (f"\nYou cannot edit {r['md']} or {r['test']}. If the fix must change what the test relies on "
+                     f"(selectors, page structure), call finish with blocked_reason '{REPRO_EDIT}: <why>' so the "
+                     "owner can approve it.")
+        return text
+
+    def _e2e_packages(self) -> list[Any]:
+        return [p for p in self.cfg.packages if p.commands.get("e2e")]
+
+    def _covering(self, job: dict[str, Any], sb: Sandbox, changed: list[str]) -> list[tuple[Any, Any]]:
+        """Committed reproductions whose `covers:` paths this change touches (other than its own)."""
+        own = (job["data"].get("repro") or {}).get("md")
+        return repro_mod.covering(Path(sb.root), self.cfg, changed, exclude=[own] if own else [])
+
+    def _evidence(self, job_id: str, phase: str) -> Path:
+        base = self.state_dir / "evidence" / job_id
+        n = 1
+        while (base / f"{phase}-{n}").exists():
+            n += 1
+        out = base / f"{phase}-{n}"
+        out.mkdir(parents=True)
+        return out
+
+    def _reproduce(self, job: dict[str, Any], root: Path, spec: repro_mod.ReproSpec, mode: str, phase: str,
+                   where: str, **extra: Any) -> dict[str, Any]:
+        """Start the app in `root`, run the reproducer there, record the run; returns its result."""
+        out = self._evidence(job["id"], phase)
+        self._check_budget(job["id"])
+        with running_app(self.cfg, root, out / "app.log") as url:
+            req = repro_mod.ReproRequest(spec=spec, url=url, mode=mode, out_dir=out, where=where,
+                                         answers=job["data"].get("answers") or [], **extra)
+            self.store.event(job["id"], "agent.start", "reproducer", {"mode": mode, "repro": spec.path, "where": where})
+            res, turn = self.reproducer.reproduce(req)
+        self._charger(job["id"])("reproducer", turn)
+        evidence = self.state_dir / "evidence" / job["id"]
+        res = {**res, "mode": mode, "where": where, "phase": out.name, "at": time.time(),
+               "screenshots": repro_mod.shots(out, evidence),
+               "verdict": repro_mod.verdict(res, spec.kind)}
+        self.store.event(job["id"], "agent.end", "reproducer", {
+            "mode": mode, "repro": spec.path, "reproduced": res.get("reproduced"), "verdict": res["verdict"],
+            "measurements": res.get("measurements"), "notes": str(res.get("notes", ""))[:1000]})
+        self.echo(f"  reproducer ({mode}, {where}): {res['verdict']}")
+        return res
+
+    def _e2e_one(self, root: Path, pkg: Any, test: str, log: Path,
+                 exec_fn: Callable[[str, str], Any] | None = None) -> dict[str, Any]:
+        """Run one e2e test with the app started in `root`; say how it ended (see apprun.classify)."""
+        timeout = self.cfg.get("execution.command_timeout_s", 900)
+        exec_fn = exec_fn or (lambda cmd, cwd: run(cmd, cwd=Path(root) / cwd, timeout=timeout,
+                                                   env=sandbox_env(self.cfg.get("execution.env"))))
+        res = run_e2e(self.cfg, Path(root), exec_fn, pkg, f"-p no:cacheprovider {test}", log)
+        f = classify(res)
+        return {"status": "pass" if f.kind == "pass" else "fail", "kind": f.kind, "detail": f.detail,
+                "output": res.tail(4000)}
+
+    def _s_reproducing(self, job: dict[str, Any]) -> None:
+        """Prove the problem on the base commit, twice: the English steps in a real browser, and a
+        Playwright test written from them that fails by its assertion. Commit both before the fix."""
+        d = job["data"]
+        plan, item, sb = d["repro_plan"], self._item(job), self._sandbox(job)
+        pkg = self._repro_package(plan)
+        folder = dict((p.name, f) for p, f in self.cfg.repro_dirs())[pkg.name]
+        slug = repro_mod.slug_for(item.title)
+        md = f"{folder}/{slug}.md"
+        test = f"{repro_mod.e2e_dir(self.cfg, pkg)}/{repro_mod.test_name(slug)}"
+        text = repro_mod.render(item.title, f"{item.source_kind}:{item.external_id}", plan["kind"],
+                                plan.get("covers") or [], plan.get("path") or "/", plan["steps"],
+                                plan.get("expected", ""), plan.get("measure") or [], test=test)
+        spec = repro_mod.parse(text, md)
+        what = "bug" if plan["kind"] == "bug" else "feature"
+        sb.reset()  # the base commit, as it is: nothing from an earlier attempt
+        self._write(sb, md, text)
+        state: dict[str, Any] = {"kind": plan["kind"], "package": pkg.name, "md": md, "test": test,
+                                 "files": [md, test]}
+        base = self._reproduce(job, sb.root, spec, "reproduce", "base", "the base commit (before any fix)",
+                               test_path=test)
+        state["base"] = base
+        if not base.get("reproduced"):
+            self.store.update_job(job["id"], repro=state, failed_state="queued")
+            seen = repro_mod.describe(base.get("measurements") or [])
+            return self._needs_human(self.store.job(job["id"]), (
+                f"{what} not understood: the reproducer followed the steps on the current code in a browser and "
+                + ("the bug did not show" if what == "bug" else "the behaviour is already there")
+                + (f" (measured {seen})" if seen else "") + f". {str(base.get('notes', '')).strip()[:600]} "
+                "Reply with clearer steps (what to click, what to look at) and the job triages again."))
+        source, tries = base.get("test_source") or "", []
+        for attempt in (1, 2):
+            self._write(sb, test, source)
+            ran = self._e2e_one(sb.root, pkg, test, self.state_dir / "evidence" / job["id"] / f"e2e-base-{attempt}.log",
+                                lambda cmd, cwd: sb.exec(cmd, cwd=cwd, timeout=self.cfg.get("execution.command_timeout_s", 900)))
+            tries.append({**ran, "attempt": attempt})
+            self.store.event(job["id"], "repro.test_on_base", "factory",
+                             {"attempt": attempt, "kind": ran["kind"], "detail": ran["detail"][:1000]})
+            if ran["kind"] == "assertion":
+                break
+            if attempt == 2:
+                state["test_on_base"] = tries
+                self.store.update_job(job["id"], repro=state, failed_state="reproducing")
+                return self._needs_human(self.store.job(job["id"]), (
+                    f"repro test unusable: the {what} shows in the browser, but the generated test {test} did not "
+                    f"fail by its assertion on the current code ({ran['kind']}: {ran['detail'][:500]}) after "
+                    "one regeneration. Retry, or write the test by hand on the branch."))
+            why = ("it passed, so it does not check the problem" if ran["kind"] == "pass"
+                   else f"it failed by {ran['kind']}, not by its assertion")
+            regen = self._reproduce(job, sb.root, spec, "regenerate", "regenerate", "the base commit (before any fix)",
+                                    test_path=test, previous_test=source,
+                                    test_output=f"Failure kind: {ran['kind']} ({why}).\n{ran['output']}")
+            source = regen.get("test_source") or source
+            state["regenerated"] = regen
+        state["test_on_base"] = tries
+        # Commit exactly the two files, nothing a run left behind.
+        sb.reset()
+        self._write(sb, md, text)
+        self._write(sb, test, source)
+        sha = sb.commit(f"Reproduce: {item.title}\n\nThe {what} shows on this commit, in a browser ({md}) and in "
+                        f"a Playwright test ({test}) that fails by its assertion. The fix follows.\n\n"
+                        f"Factory-Job: {job['id']}\nWork-Item: {item.source_kind}:{item.external_id}")
+        state.update(commit=sha, protected=[md, test])
+        self.store.event(job["id"], "repro.committed", "factory", {"commit": sha, "files": [md, test]})
+        self.store.update_job(job["id"], "implementing", repro=state)
+
+    @staticmethod
+    def _write(sb: Sandbox, rel: str, content: str) -> None:
+        p = Path(sb.root) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content if content.endswith("\n") else content + "\n")
+
+    def _s_confirming(self, job: dict[str, Any]) -> None:
+        """After the fix: this job's e2e test must pass and its browser reproduction must no longer
+        show the problem; reproductions covering the changed paths must not show theirs again."""
+        d, sb = job["data"], self._sandbox(job)
+        r = dict(d.get("repro") or {})
+        problems: list[str] = []
+        timeout = self.cfg.get("execution.command_timeout_s", 900)
+        sb_exec = lambda cmd, cwd: sb.exec(cmd, cwd=cwd, timeout=timeout)  # noqa: E731
+        logs = self.state_dir / "evidence" / job["id"]
+        if r.get("commit"):
+            pkg = next(p for p in self.cfg.packages if p.name == r["package"])
+            spec = repro_mod.parse((Path(sb.root) / r["md"]).read_text(), r["md"])
+            e2e = self._e2e_one(sb.root, pkg, r["test"], logs / "e2e-after.log", sb_exec)
+            browser = self._reproduce(job, sb.root, spec, "confirm", "after", "the branch with the fix")
+            after: dict[str, Any] = {"e2e": e2e, "browser": browser}
+            if r.get("edit_approved"):
+                after["test_on_base"] = self._edited_test_on_base(job, r, pkg, sb)
+            r["after"] = after
+            problems += self._disagreement(r, e2e, browser, after.get("test_on_base"))
+        checks = []
+        for pkg, spec in self._covering(job, sb, sb.changed_files()):
+            res = self._reproduce(job, sb.root, spec, "confirm", "covered", "the branch with the change")
+            checks.append({"md": spec.path, "kind": spec.kind, "result": res})
+            if res.get("reproduced"):
+                problems.append(f"- Regression: {spec.path} ({spec.title}) shows the problem again on this branch: "
+                                f"{repro_mod.describe(res.get('measurements') or [])}. {str(res.get('notes', ''))[:300]}")
+        self.store.update_job(job["id"], repro=r or None, repro_checks=checks)
+        if not problems:
+            self.store.update_job(job["id"], "reviewing")
+            return
+        rounds = d.get("confirm_rounds", 0)
+        evidence = "\n".join(problems)
+        self.store.event(job["id"], "repro.not_confirmed", "factory", {"problems": problems, "round": rounds})
+        if rounds < self.cfg.get("limits.fix_rounds", 1):
+            self.store.update_job(job["id"], "implementing", confirm_rounds=rounds + 1,
+                                  feedback="The fix is not confirmed. Evidence:\n" + evidence)
+            return
+        self._needs_human(job, f"fix not confirmed after {rounds} fix round(s):\n{evidence[:1500]}")
+
+    def _disagreement(self, r: dict[str, Any], e2e: dict[str, Any], browser: dict[str, Any],
+                      on_base: dict[str, Any] | None) -> list[str]:
+        """Defects with evidence when the two checks do not both say the problem is gone."""
+        what = "bug" if r.get("kind") == "bug" else "missing behaviour"
+        seen = repro_mod.describe(browser.get("measurements") or []) or "no measurements"
+        out = []
+        test_ok, browser_ok = e2e["status"] == "pass", not browser.get("reproduced")
+        if test_ok and not browser_ok:
+            out.append(f"- {r['test']} passes, but in a real browser the {what} still shows ({seen}). The fix may "
+                       f"satisfy the test without fixing the {what}. {str(browser.get('notes', ''))[:400]}")
+        elif browser_ok and not test_ok:
+            out.append(f"- In a real browser the {what} is gone ({seen}), but {r['test']} still fails "
+                       f"({e2e['kind']}): {e2e['detail'][:600]}")
+        elif not test_ok and not browser_ok:
+            out.append(f"- The {what} still shows: {r['test']} fails ({e2e['kind']}: {e2e['detail'][:400]}) and the "
+                       f"browser reproduction measured {seen}.")
+        if on_base and on_base.get("kind") != "assertion":
+            out.append(f"- The edited {r['test']} no longer fails by its assertion on the code before the fix "
+                       f"({on_base.get('kind')}: {str(on_base.get('detail'))[:300]}), so it no longer proves the {what}.")
+        return out
+
+    def _edited_test_on_base(self, job: dict[str, Any], r: dict[str, Any], pkg: Any, sb: Sandbox) -> dict[str, Any]:
+        """An approved edit of the test must still fail, by its assertion, on the code before the fix."""
+        edited = (Path(sb.root) / r["test"]).read_text()
+
+        def go(wt: Path) -> dict[str, Any]:
+            self.sandboxes.prepare(wt)
+            (wt / r["test"]).write_text(edited)
+            return self._e2e_one(wt, pkg, r["test"], self.state_dir / "evidence" / job["id"] / "e2e-edited-base.log")
+        return self._in_main_worktree(r["commit"], go)
+
+    def allow_repro_edit(self, job_id: str, by: str = "owner") -> str:
+        """The owner lets the implementer change this job's committed reproduction test (the fix
+        must change what it relies on). The job retries from the reproduction commit."""
+        job = self.store.job(job_id)
+        reason = job["data"].get("needs_human_reason") or ""
+        if job["state"] != "needs_human" or not reason.startswith(REPRO_EDIT):
+            raise ValueError(f"{job_id} is not waiting for approval to change its reproduction")
+        r = dict(job["data"].get("repro") or {})
+        r["edit_approved"] = {"by": by, "at": time.time(), "reason": reason[len(REPRO_EDIT):].strip(" :")}
+        r["protected"] = [r["md"]]  # the English record stays; the test may change
+        self.store.update_job(job_id, repro=r)
+        self.store.event(job_id, "repro.edit_approved", "human", {"by": by, "reason": reason})
+        return self.retry(job_id)
+
+    # ------------------------------------------------------------ suites (CLI) --
+    def repro_suite(self, only: list[str] | None = None, ref: str | None = None) -> list[dict[str, Any]]:
+        """Run committed English reproductions on `ref` (default branch) in a clean worktree.
+        Each is a check: the problem it describes must not show. Costs model time."""
+        tip = git(self.repo, "rev-parse", ref or self.cfg.default_branch).strip()
+        run_dir = self.state_dir / "evidence" / f"suite-{repro_mod.stamp()}"
+
+        def go(wt: Path) -> list[dict[str, Any]]:
+            self.sandboxes.prepare(wt)
+            results = []
+            for pkg, spec in repro_mod.suite_files(wt, self.cfg):
+                if only and spec.path not in only and spec.slug not in only:
+                    continue
+                out = run_dir / spec.slug
+                out.mkdir(parents=True, exist_ok=True)
+                with running_app(self.cfg, wt, out / "app.log") as url:
+                    res, turn = self.reproducer.reproduce(repro_mod.ReproRequest(
+                        spec=spec, url=url, mode="confirm", out_dir=out,
+                        where=f"{ref or self.cfg.default_branch} at {tip[:10]}"))
+                self.store.record_run("repro-suite", "reproducer", turn.model, turn.usage, turn.cost_usd)
+                results.append({"md": spec.path, "kind": spec.kind, "reproduced": bool(res.get("reproduced")),
+                                "verdict": repro_mod.verdict(res, spec.kind), "measurements": res.get("measurements"),
+                                "notes": res.get("notes", ""), "screenshots": repro_mod.shots(out, run_dir),
+                                "evidence": str(out), "cost_usd": turn.cost_usd})
+            return results
+        return self._in_main_worktree(tip, go)
+
+    def e2e_suite(self, ref: str | None = None) -> list[dict[str, Any]]:
+        """Run every package's e2e suite on `ref` (default branch) in a clean worktree."""
+        tip = git(self.repo, "rev-parse", ref or self.cfg.default_branch).strip()
+
+        def go(wt: Path) -> list[dict[str, Any]]:
+            self.sandboxes.prepare(wt)
+            out = []
+            for pkg in self._e2e_packages():
+                res = run_e2e_in(self.cfg, wt, pkg, repro_mod.e2e_dir(self.cfg, pkg),
+                                 timeout=self.cfg.get("execution.command_timeout_s", 900),
+                                 log_path=self.state_dir / "app-logs" / "e2e-suite.log")
+                out.append({"package": pkg.name, "ok": suite_ok(res), "output": res.tail(4000)})
+            return out
+        return self._in_main_worktree(tip, go)
 
     def _s_reviewing(self, job: dict[str, Any]) -> None:
         tier = self._current_tier(job)
@@ -1098,7 +1461,7 @@ class Factory:
         """Run observe.post_merge commands on the default branch tip in a throwaway worktree.
         Returns '' when they pass (or none are configured), else the failing output."""
         commands = self.cfg.get("observe.post_merge") or []
-        if not commands:
+        if not commands and not self._e2e_packages():
             return ""
         tip = git(self.repo, "rev-parse", self.cfg.default_branch).strip()
         cache = self.__dict__.setdefault("_post_merge_cache", {})
@@ -1120,6 +1483,13 @@ class Factory:
                           env=sandbox_env(self.cfg.get("execution.env")))
                 if not res.ok:
                     return f"`{cmd}` failed:\n{res.tail(3000)}"
+            # The e2e suite is a regression check after every merge too, against the merged app.
+            for pkg in self._e2e_packages():
+                res = run_e2e_in(self.cfg, wt, pkg, repro_mod.e2e_dir(self.cfg, pkg),
+                                 timeout=self.cfg.get("execution.command_timeout_s", 900),
+                                 log_path=self.state_dir / "app-logs" / "post-merge.log")
+                if not suite_ok(res):
+                    return f"e2e suite ({pkg.name}) failed:\n{res.tail(3000)}"
             return ""
         finally:
             run(["git", "-C", str(self.repo), "worktree", "remove", "--force", str(wt)], shell=False)

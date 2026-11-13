@@ -21,12 +21,21 @@ packages:
       typecheck: npx tsc --noEmit
       build: npm run -s build
       test: npx vitest run {args}
+      e2e: python -m pytest -q {args}      # pytest-playwright, against the started app (ASF_APP_URL)
+      repro: tests/repro                   # English reproductions the reproducer agent runs
   - name: mobile
     root: mobile
     triggers: ["mobile/**"]
     commands:
       typecheck: npx tsc --noEmit -p .
       test: npx jest {args}
+
+# The app, for browser reproductions and the e2e suite. Started in the checkout under test.
+app:
+  start: npm run -s dev -- --port {port}
+  port: 0
+  health: /healthz
+  start_timeout_s: 60
 
 tests:
   globs: ["**/*.test.*", "**/__tests__/**", "tests/**"]

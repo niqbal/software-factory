@@ -254,7 +254,7 @@ def cmd_add(app: App) -> int:
     return 0
 
 
-ACTIVE = ["queued", "triaged", "implementing", "testing", "verifying", "reviewing", "committing",
+ACTIVE = ["queued", "triaged", "reproducing", "implementing", "testing", "verifying", "confirming", "reviewing", "committing",
           "delivering", "awaiting_approval", "merging", "observing"]
 
 
@@ -358,6 +358,44 @@ def cmd_retry(app: App) -> int:
 def cmd_answer(app: App) -> int:
     print(f"{app.args.job}: {app.factory.answer(app.args.job, app.args.text, by=app.args.by or 'human')}; "
           f"run `asf run --job {app.args.job}`")
+    return 0
+
+
+def cmd_repro(app: App) -> int:
+    """Run committed English reproductions in a browser (model time) on the default branch."""
+    if not app.args.all and not app.args.files:
+        print("name reproductions (tests/repro/<slug>.md or <slug>) or pass --all", file=sys.stderr)
+        return 2
+    results = app.factory.repro_suite(None if app.args.all else app.args.files, ref=app.args.ref)
+    if not results:
+        print("no reproductions found (packages[].commands.repro names the folder)")
+        return 0
+    for r in results:
+        seen = "; ".join(f"{m['name']}={m['value']} (expected {m['expected']})" for m in r["measurements"] or [])
+        print(f"{'FAIL' if r['reproduced'] else 'ok  '}  {r['md']}: {r['verdict']}  {seen}")
+        if r["reproduced"] and r["notes"]:
+            print(f"      {r['notes'][:300]}")
+    print(f"evidence: {Path(results[0]['evidence']).parent}")
+    return 1 if any(r["reproduced"] for r in results) else 0
+
+
+def cmd_e2e(app: App) -> int:
+    """Run the e2e suites on the default branch, with the app started for them."""
+    results = app.factory.e2e_suite(ref=app.args.ref)
+    if not results:
+        print("no package declares an e2e command")
+        return 0
+    for r in results:
+        print(f"{'ok  ' if r['ok'] else 'FAIL'}  {r['package']}")
+        if not r["ok"] or app.args.verbose:
+            print(r["output"])
+    return 0 if all(r["ok"] for r in results) else 1
+
+
+def cmd_allow_repro_edit(app: App) -> int:
+    state = app.factory.allow_repro_edit(app.args.job, by=app.args.by or os.environ.get("USER", "owner"))
+    print(f"{app.args.job}: the implementer may change its reproduction test; resumes at {state}. "
+          f"Run `asf run --job {app.args.job}`")
     return 0
 
 
@@ -518,6 +556,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("job")
     s.add_argument("text")
     s.add_argument("--by")
+    s = sub.add_parser("repro", help="run committed English reproductions in a browser (uses model time)")
+    s.add_argument("files", nargs="*", help="tests/repro/<slug>.md paths or slugs")
+    s.add_argument("--all", action="store_true", help="every reproduction in every package's repro folder")
+    s.add_argument("--ref", help="branch or commit to check (default: the default branch)")
+    s = sub.add_parser("e2e", help="run the e2e suites with the app started for them")
+    s.add_argument("--ref", help="branch or commit to check (default: the default branch)")
+    s.add_argument("-v", "--verbose", action="store_true")
+    s = sub.add_parser("allow-repro-edit", help="let a job's implementer change its committed reproduction test")
+    s.add_argument("job")
+    s.add_argument("--by")
     s = sub.add_parser("rerun", help="replace a stopped job with a new one for the same item, from the default branch")
     s.add_argument("job")
     s.add_argument("--by")
@@ -552,7 +600,8 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
         "status": cmd_status, "events": cmd_events, "report": cmd_report, "ui": cmd_ui,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
-        "deploy": cmd_deploy, "resume": cmd_resume, "retry": cmd_retry, "rerun": cmd_rerun, "answer": cmd_answer, "revise": cmd_revise, "publish": cmd_publish,
+        "deploy": cmd_deploy, "resume": cmd_resume, "retry": cmd_retry, "rerun": cmd_rerun, "answer": cmd_answer,
+        "repro": cmd_repro, "e2e": cmd_e2e, "allow-repro-edit": cmd_allow_repro_edit, "revise": cmd_revise, "publish": cmd_publish,
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
         "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters,

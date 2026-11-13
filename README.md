@@ -128,7 +128,7 @@ along (verifying, reviewing) goes before new work. A usage-limit error ("You've 
 ## Job states: delivered is not done
 
 ```
-queued -> triaged -> implementing -> testing -> verifying -> reviewing -> committing -> delivering
+queued -> triaged -> [reproducing] -> implementing -> testing -> verifying -> [confirming] -> reviewing -> committing -> delivering
   -> awaiting_review (a person reviews; or awaiting_approval -> merging when the agent may merge)
   -> merged   (on the default branch: observe.post_merge commands run there)
   -> awaiting_deploy -> deploying   (only when a deploy step matches the change)
@@ -170,6 +170,81 @@ writing the change.
 
 For the `test` gate, coverage is path-based: every changed code file must be owned by at least one package that declares a `test` command. At tiers 1-3, uncovered code paths fail the gate and list the files; at tier 0, the gate passes with a warning that lists those files. Docs and config-only changes are not treated as code by this rule.
 
+## Browser reproductions: prove the bug before the fix, and prove it gone after
+
+Tests that read source text or run in a fake DOM can pass while the real page is still broken.
+For a bug that shows in the app (or a feature a user can see), the factory proves the problem in
+a real browser on the base commit before anyone fixes it, and proves it gone afterwards, in two
+ways that must agree.
+
+**`app:`** in `factory.yaml` says how to start the app. The factory starts it in the checkout
+being checked (the job's sandbox, the base commit, a post-merge worktree) with the sandbox's
+scrubbed environment, waits for the health check, and stops the whole process group afterwards.
+
+```yaml
+app:
+  start: .venv/bin/python -m asf.demo --port {port}   # {port} is replaced; PORT is exported too
+  port: 0                  # 0: a free port each time
+  health: /api/health      # path (or URL) polled until it answers 2xx/3xx
+  start_timeout_s: 30
+packages:
+- name: asf
+  commands:
+    e2e: .venv/bin/python -m pytest -q -p no:cacheprovider {args}   # {args}: tests/e2e or one test file
+    repro: tests/repro     # not a command: the folder of English reproductions
+```
+
+This repository's app is `python -m asf.demo`: the console with demo data (one job with a long
+diff, at `/#p/demo/JOB-demo01`), built in a temporary folder from the checkout under test.
+
+**Two suites, both committed.**
+
+| Suite | File | Run by | When |
+|---|---|---|---|
+| English reproduction | `tests/repro/<slug>.md`: front matter `item`, `kind` (bug / feature), `covers:` path globs, `path` to open, `test`; then numbered steps, the expected result, the values to measure | the reproducer agent, in a real browser (model time) | the job that wrote it; later jobs whose changed files match `covers:`; `asf repro --all` |
+| e2e test | `tests/e2e/test_<slug>.py` (pytest-playwright; the app's URL is `ASF_APP_URL`) | pytest, deterministic | the `e2e` gate on every change, after every merge, `asf e2e` |
+
+`tests/e2e/conftest.py` skips the e2e suite when `ASF_APP_URL` is unset, so a plain `pytest`
+needs no browser. The e2e suite needs `pip install -e '.[e2e]'` and `playwright install chromium`
+in the environment the factory runs commands in (here `.venv`); the reproducer needs `npx`.
+
+**The reproducer** is `claude -p` with every built-in tool switched off (`--tools ""`) and one MCP
+server, `@playwright/mcp` (`--mcp-config` with `--strict-mcp-config`), headless and limited to the
+app's origin. `--allowedTools` lists the browser tools it may use, `--permission-mode dontAsk`
+refuses the rest, and the two that reach outside the browser (`browser_run_code_unsafe`, which
+runs code in the MCP server's Node process, and `browser_file_upload`, which reads local files)
+are removed with `--disallowedTools`. So it can drive a browser and nothing else: no files, no
+shell. It answers with `--json-schema` structured output (reproduced, measured values, notes,
+screenshot names, the test source), and the factory writes the files: the broker stays the only
+path from a model to the repository. Screenshots go to `$ASF_HOME/<repo>/evidence/<job>/`.
+Settings live under `repro:` (`model`, `effort`, `timeout_s`, `mcp_command`, `e2e_dir`).
+
+**The flow**, for a bug or feature when an app is configured and triage wrote browser steps:
+
+1. Triage writes the English steps (`repro` in its output): path, numbered steps, expected
+   result, values to measure, the paths they cover.
+2. `reproducing`: on the base commit the reproducer runs the steps and must reproduce the
+   problem (for a feature: show the behaviour missing). If it can't, the job stops with
+   "bug not understood" (or "feature not understood"), asked on the issue; an answer re-triages
+   with it.
+3. The reproducer writes the e2e test from what it saw. It must fail on base *by its assertion*;
+   a pass, a timeout, a missing selector or a crash proves nothing. One regeneration with the
+   pytest output, then "repro test unusable" for a human.
+4. Both files are committed on the branch before the implementer starts. For the rest of the job
+   they are protected: the broker refuses edits, and the `test_integrity` gate fails if they
+   changed. If the fix must change what the test relies on (selectors, page structure), the
+   implementer stops with "repro test needs changing: ..." and the owner decides (**Allow test
+   change** in the console, or `asf allow-repro-edit JOB`). An approved edit must still fail by
+   its assertion on the code before the fix.
+5. After the fix the `e2e` gate must pass, then `confirming`: the job's own test runs again and
+   the reproducer runs the steps on the branch and must report the problem gone. If the two
+   disagree (or both still see it), that is a defect with evidence: one fix round with that
+   evidence, then the job stops with "fix not confirmed". In the same step, every committed
+   reproduction whose `covers:` matches the change's files is run and must stay gone.
+
+The console's Overview tab shows the evidence: both verdicts on the base commit and after the
+fix, the measured values, the reproducer's notes and its screenshots.
+
 ## Commands
 
 | Command | What it does |
@@ -187,6 +262,9 @@ For the `test` gate, coverage is path-based: every changed code file must be own
 | `revise JOB --note "..." [--notes-file F] [--extra-usd N]` | Send a delivered, unmerged job back with review notes. The implementer works on top of the delivered commit on the same branch, then the tester, gates and reviewers run again over the whole change, and one new commit is added. Each revision gets a fresh budget. Follow with `run --job JOB`. |
 | `publish JOB` | Push a delivered job's branch and open a draft pull request (the report, plus `Fixes #N` for GitHub issues). Works whatever `delivery.provider` is; later revisions of the job update the same PR. |
 | `reviews [--job JOB] [--dry-run]` | Review on GitHub: a comment starting with `/revise` on a factory PR sends the job back with notes (the rest of the comment plus every line comment on the diff since the last revision), pushes the new commit to the PR and replies with the result. Only the repo owner, members and collaborators are obeyed; other comments are ignored and logged. Run it by hand or on a schedule. |
+| `repro [FILES] [--all] [--ref R]` | Run committed English reproductions in a real browser on the default branch (or `R`), in a clean worktree with the app started. Each must report its problem gone. Uses model time. |
+| `e2e [--ref R]` | Run every package's e2e suite on the default branch with the app started. |
+| `allow-repro-edit JOB` | Let a job's implementer change its committed reproduction test (the fix must change what it relies on). |
 | `pause-all` / `resume-all` | Kill switch. A `PAUSED` file in the state directory works too. |
 | `serve [--worker]` | Webhook gateway with signature verification, job API, optional worker loop. |
 | `ci-workflow [--write]` | GitHub Actions workflow for runner mode. |
@@ -205,6 +283,7 @@ override any config value (CI uses this to switch delivery to GitHub).
 | Tool broker: role permissions, protected paths, test integrity, command allowlist, secret redaction | `asf/broker.py` | Built, tested |
 | Agent roles: triage, implementer, tester, reviewer, security, CI fixer | `asf/agents/` | Built, live-tested with Claude |
 | Deterministic gates with base-commit comparison | `asf/gates.py` | Built, tested |
+| Browser reproductions: app lifecycle, reproducer agent (`claude -p` + `@playwright/mcp` only), e2e suite | `asf/apprun.py`, `asf/repro.py`, `asf/demo.py` | Scripted tests for every path; live-tested on the console scroll bug (`tests/test_repro_real.py`, opt-in) |
 | Setup agent | `asf/setup_agent.py` | Built, tested on Node monorepo, Python, Go fixtures and two real repos |
 | Webhook gateway | `asf/server.py` | Built, tested with signed requests |
 | Intake: local inbox, beads | `adapters/intake/` | Live-tested |
@@ -249,7 +328,10 @@ new adapter and a line in `factory.yaml`.
 .venv/bin/python -m pytest -q
 ```
 
-The suite runs the full pipeline end to end with a scripted model. It covers shadow
+The suite runs the full pipeline end to end with a scripted model, browser reproductions
+included (`tests/test_repro.py`). `ASF_REAL_REPRO=1` adds one real run of the reproducer on the
+console's scroll bug (`tests/test_repro_real.py`): Claude Code drives Chromium, reproduces the
+bug, writes the Playwright test, and confirms the fix. It covers shadow
 delivery, merge after approval, reviewer fix rounds, budget pause and resume, the kill
 switch, prompt-injection containment, crash recovery, retry from a clean sandbox, and the
 signed webhook gateway. No network calls are made and nothing is spent.

@@ -16,7 +16,7 @@ BUCKETS = {
     "shipped": {"done"},
     "verifying": {"merged", "observing", "merging", "deploying"},
     "awaiting_review": {"awaiting_review", "awaiting_approval", "awaiting_deploy"},
-    "in_progress": {"queued", "triaged", "implementing", "testing", "verifying", "reviewing",
+    "in_progress": {"queued", "triaged", "reproducing", "implementing", "testing", "verifying", "confirming", "reviewing",
                     "committing", "delivering"},
     "stopped": {"needs_human", "failed", "paused"},
     "abandoned": {"rejected"},

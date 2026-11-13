@@ -74,7 +74,7 @@ def make_handler(factory: Factory, admin_token: str | None):
 
 def worker_loop(factory: Factory, stop: threading.Event, interval: float = 5.0) -> None:
     while not stop.is_set():
-        for job in factory.store.jobs(["queued", "triaged", "implementing", "testing", "verifying",
+        for job in factory.store.jobs(["queued", "triaged", "reproducing", "implementing", "testing", "verifying", "confirming",
                                        "reviewing", "committing", "delivering", "awaiting_approval",
                                        "awaiting_review", "merging", "merged",
                                        "observing"]):
