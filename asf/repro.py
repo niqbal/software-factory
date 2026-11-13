@@ -196,6 +196,9 @@ def _prompt(req: ReproRequest, project: str) -> tuple[str, str]:
     return system, "\n\n".join(task)
 
 
+CLAUDE_KINDS = ("claude_code", "claude_code_native")
+
+
 class ClaudeReproducer:
     """`claude -p`, built-in tools off, with @playwright/mcp as its only MCP server."""
 
@@ -203,9 +206,9 @@ class ClaudeReproducer:
         self.cfg = cfg
         self.settings = cfg.get("repro") or {}
         pooled = [b.get("binary") for b in (cfg.get("models.backends") or {}).values()
-                  if isinstance(b, dict) and b.get("provider") == "claude_code" and b.get("binary")]
-        explicit = self.settings.get("binary") or (cfg.get("models.binary") if cfg.get("models.provider") ==
-                                                   "claude_code" else None) or next(iter(pooled), None)
+                  if isinstance(b, dict) and b.get("provider") in CLAUDE_KINDS and b.get("binary")]
+        explicit = self.settings.get("binary") or (cfg.get("models.binary") if cfg.get("models.provider") in
+                                                   CLAUDE_KINDS else None) or next(iter(pooled), None)
         self.binary = find_cli("claude", explicit, "ASF_CLAUDE_BIN")
 
     def credentials_problem(self) -> str | None:

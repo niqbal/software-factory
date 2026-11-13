@@ -432,12 +432,12 @@ def project_checks(repo: Path, sd: Path | None = None,
             out.append(Check("models", "a usable backend", "fail", "no backend in the pool is ready", "", True))
         for role in ("triage", "implementer", "tester", "reviewer", "security", "ci_fixer"):
             out.append(Check(f"route:{role}", f"{role}", "info", " -> ".join(pool.order(role))))
-    elif provider == "claude_code":
+    elif provider in ("claude_code", "claude_code_native"):
         from .adapters.models.claude_code import find_binary
         b = find_binary(cfg.get("models") or {})
         out.append(Check("models", "Claude Code CLI", "ok" if b else "fail", b or "not found",
                          "" if b else "set models.binary or ASF_CLAUDE_BIN", True))
-    elif provider == "cursor_cli":
+    elif provider in ("cursor_cli", "cursor_native"):
         from .adapters.models.cursor_cli import find_binary as find_cursor
         b = find_cursor(cfg.get("models") or {})
         out.append(Check("models", "Cursor CLI", "ok" if b else "fail", b or "not found",

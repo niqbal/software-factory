@@ -28,7 +28,9 @@ from ... import limits
 from ..base import AdapterContext, Conversation, ModelProvider, ModelTurn, ToolSpec
 
 KINDS = {"claude_code": "asf.adapters.models.claude_code:ClaudeCodeProvider",
+         "claude_code_native": "asf.adapters.models.claude_native:ClaudeNativeProvider",
          "cursor_cli": "asf.adapters.models.cursor_cli:CursorProvider",
+         "cursor_native": "asf.adapters.models.cursor_native:CursorNativeProvider",
          "anthropic": "asf.adapters.models.anthropic_provider:AnthropicProvider",
          "scripted": "asf.adapters.models.scripted:ScriptedProvider"}
 
@@ -108,6 +110,13 @@ class PoolProvider(ModelProvider):
     def conversation_for(self, role: str, system: str, tools: list[ToolSpec]) -> Conversation:
         name, prov, model = self.choose(role)
         return _Tagged(prov.conversation(model.get("model", "auto"), system, tools, model.get("effort", "medium")), name)
+
+    def native_for(self, role: str, sandbox: Any) -> tuple[str, ModelProvider, dict[str, Any]] | None:
+        """The backend for `role` when it runs roles as native sessions, else None (use conversation_for)."""
+        name, prov, model = self.choose(role)
+        if hasattr(prov, "native_for") and prov.native_for(role, sandbox):
+            return name, prov, model
+        return None
 
     def conversation(self, model: str, system: str, tools: list[ToolSpec],
                      effort: str = "medium", max_tokens: int = 16000) -> Conversation:

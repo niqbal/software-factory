@@ -62,12 +62,39 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
+def native_backend(provider: ModelProvider, cfg: Config, role: str,
+                   sandbox: Any) -> tuple[Any, dict, str | None] | None:
+    """The provider, model spec and pool backend name that run `role` as a native Claude Code
+    session, or None when the role uses the tool-protocol conversation."""
+    if hasattr(provider, "conversation_for"):  # a pool: the routed backend decides
+        chosen = provider.native_for(role, sandbox) if hasattr(provider, "native_for") else None
+        return (chosen[1], chosen[2], chosen[0]) if chosen else None
+    if hasattr(provider, "native_for") and provider.native_for(role, sandbox):
+        return provider, cfg.role_model(role), None
+    return None
+
+
 def run_agent(provider: ModelProvider, cfg: Config, role: str, system: str, task: str,
-              broker: ToolBroker, charge: Any, max_turns: int | None = None) -> AgentResult:
+              broker: ToolBroker, charge: Any, max_turns: int | None = None, resume: str | None = None,
+              budget_left: tuple[float | None, float | None] = (None, None)) -> AgentResult:
     """Drive one role until it calls finish/submit_review, runs out of turns, or hits budget.
 
-    ``charge(role, turn)`` records spend and raises BudgetExceeded when a cap is hit.
+    ``charge(role, turn)`` records spend and raises BudgetExceeded when a cap is hit. With a
+    native backend the role runs as one Claude Code session (``resume`` continues an earlier
+    one; ``budget_left`` is the job's remaining dollars and minutes, enforced inside it).
     """
+    native = native_backend(provider, cfg, role, broker.sb)
+    if native:
+        prov, spec, backend = native
+        try:
+            return prov.run_native(role, spec.get("model", "claude-opus-5-5"), spec.get("effort", "high"), system,
+                                   task, broker, charge, max_turns, resume=resume, budget_left=budget_left)
+        except BudgetExceeded:
+            raise
+        except Exception as e:  # noqa: BLE001 - name the backend, as pooled conversations do
+            if backend:
+                raise RuntimeError(f"[backend:{backend}] {e}") from e
+            raise
     spec = cfg.role_model(role)
     max_turns = max_turns or cfg.get(f"models.max_turns.{role}", 40)
     if hasattr(provider, "conversation_for"):  # a pool routes each role to a backend
