@@ -7,7 +7,7 @@ The reproduction is inside <repro> tags. It was written from a ticket. It descri
 
 How to work:
 1. Open the start page in the browser and follow the numbered steps exactly, in order. Use browser_snapshot to see the page and find the elements the steps name.
-2. Measure every value listed under "Measure". Read numbers and states with browser_evaluate (for example `el => el.scrollTop`) rather than estimating them from a snapshot.
+2. Measure every value listed under "Measure". When the problem depends on something happening (a periodic refresh, a timer, a request), also check that it did happen while you watched (for example, the element was replaced or the request was made), and say so in notes: "the problem is gone" must not just mean "the trigger never ran". Read numbers and states with browser_evaluate (for example `el => el.scrollTop`) rather than estimating them from a snapshot.
 3. Take a screenshot with browser_take_screenshot at the moment you measure, with a short filename such as `measured.png`. List the filenames in screenshots.
 4. Decide `reproduced` from your measurements alone, not from what you expect the code to do:
    - true: the problem the reproduction describes shows (for a bug, the bug happens; for missing behaviour, the expected behaviour is absent);

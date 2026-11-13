@@ -15,7 +15,7 @@ For the work item, produce:
   - path: the app path to open first, e.g. "/" or "/#p/demo/JOB-demo01".
   - steps: numbered, concrete browser actions a person could follow: what to click (by its visible label), what to type, how long to wait.
   - expected: what a person sees when it works.
-  - measure: the values that decide it, each as "name: how to read it (expected: ..., bug: ...)", e.g. "diff_scroll_top: the diff box's scrollTop after the wait (expected: about 800, bug: 0)". Prefer numbers and states over impressions.
+  - measure: the values that decide it, each as "name: how to read it (expected: ..., bug: ...)", e.g. "diff_scroll_top: the diff box's scrollTop after the wait (expected: about 800, bug: 0)". Prefer numbers and states over impressions. When the problem depends on something happening (a periodic refresh, a timer, a request), also measure that it happened, so a fix that just stops it does not pass.
   - covers: path globs of the code this behaviour lives in, from the layout below.
   Leave the fields empty (and lists empty) when not applicable.
 
