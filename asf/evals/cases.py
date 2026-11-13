@@ -20,6 +20,7 @@ A case is one YAML file:
                                            # (instead of `reference`; kept in the archive only)
     tags: [authored, edge-case]            # the report splits results by tag
     reference_by: cursor                   # who wrote the reference: human, claude, cursor, ...
+    needs_app: true                        # hidden tests are browser tests: start app.start for them
     test_command: "pytest -q {tests}"      # default: the owning package's test command
     setup: []                              # commands run in each fresh checkout
     deps_from: /Users/me/work/invoice      # copy execution.clone_dirs (e.g. .venv) from here
@@ -90,6 +91,7 @@ class Case:
     reference_patch: str = ""
     tags: list[str] = field(default_factory=list)
     reference_by: str = ""
+    needs_app: bool = False
     path: Path | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -121,7 +123,7 @@ class Case:
                              "ticket": {"title": self.ticket.title, "body": self.ticket.body,
                                         "acceptance": list(self.ticket.acceptance), "kind": self.ticket.kind}}
         for key in ("hidden_tests", "hidden_dir", "reference_patch", "test_command", "setup", "deps_from",
-                    "config", "tags", "reference_by", "notes"):
+                    "config", "tags", "reference_by", "needs_app", "notes"):
             value = getattr(self, key)
             if value:
                 d[key] = value
@@ -146,7 +148,7 @@ def parse_case(data: dict[str, Any], path: Path | None = None) -> Case:
     if kind not in KINDS:
         raise EvalError(f"{path or 'case'}: ticket.kind must be one of {', '.join(KINDS)}")
     known = {"id", "repo", "base", "reference", "ticket", "hidden_tests", "test_command", "setup",
-             "deps_from", "config", "notes", "hidden_dir", "reference_patch", "tags", "reference_by"}
+             "deps_from", "config", "notes", "hidden_dir", "reference_patch", "tags", "reference_by", "needs_app"}
     case_id = str(data.get("id") or (path.stem if path else ""))
     if not case_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", case_id):
         raise EvalError(f"{path or 'case'}: id must be letters, digits, '.', '_' or '-' (got {case_id!r})")
@@ -160,6 +162,7 @@ def parse_case(data: dict[str, Any], path: Path | None = None) -> Case:
                 notes=str(data.get("notes") or ""), hidden_dir=str(data.get("hidden_dir") or ""),
                 reference_patch=str(data.get("reference_patch") or ""),
                 tags=[str(t) for t in data.get("tags") or []], reference_by=str(data.get("reference_by") or ""),
+                needs_app=bool(data.get("needs_app")),
                 path=path,
                 extra={k: v for k, v in data.items() if k not in known})
 

@@ -12,6 +12,7 @@ import yaml
 
 from ..util import git
 from . import check as check_mod
+from . import importer
 from . import mine as mine_mod
 from . import report as report_mod
 from . import runner, score, variants, workspace
@@ -34,6 +35,13 @@ def add_parser(sub: Any) -> None:
     m.add_argument("--set", dest="set_name", help="set to draft into (default: the repository's name)")
     m.add_argument("--fetch-issues", action="store_true", help="read referenced issues with the GitHub CLI")
     m.add_argument("--print", action="store_true", help="print the drafts; write nothing")
+
+    im = es.add_parser("import", parents=[common], help="draft cases from jobs the factory finished")
+    im.add_argument("--project", required=True, help="project key (e.g. workflow-engine-11bf9a) or repository path")
+    im.add_argument("--jobs", nargs="+", help="only these job ids (any state with a commit)")
+    im.add_argument("--state", action="append", help="job states to take (default: done)")
+    im.add_argument("--set", dest="set_name", help="set to draft into (default: the repository's name)")
+    im.add_argument("--print", action="store_true", help="print the drafts; write nothing")
 
     c = es.add_parser("check", parents=[common], help="run each case's hidden tests on base (should fail) and reference (should pass)")
     c.add_argument("--set", dest="set_name", required=True)
@@ -69,7 +77,7 @@ def add_parser(sub: Any) -> None:
 def handle(args: argparse.Namespace) -> int:
     root = evals_root(args.evals)
     try:
-        return {"mine": _mine, "check": _check, "run": _run, "report": _report, "list": _list}[args.eval_cmd](args, root)
+        return {"import": _import, "mine": _mine, "check": _check, "run": _run, "report": _report, "list": _list}[args.eval_cmd](args, root)
     except EvalError as e:
         print(f"eval: {e}", file=sys.stderr)
         return 2
@@ -103,6 +111,30 @@ def _mine(args: argparse.Namespace, root: Path) -> int:
               f"file(s), ticket from {m['ticket_from']}")
     print(f"{wrote} draft(s) in {folder}. Rewrite each ticket as its requester would have, check it with "
           f"`asf eval check --set {es.name}` once it is in {es.cases_dir}, and delete the rest.")
+    return 0
+
+
+def _import(args: argparse.Namespace, root: Path) -> int:
+    drafts = importer.import_jobs(args.project, args.jobs, tuple(args.state or ["done"]))
+    if args.print:
+        for d in drafts:
+            print("---\n" + dump_case(d))
+        print(f"# {len(drafts)} draft(s)", file=sys.stderr)
+        return 0
+    if not drafts:
+        print("no finished jobs with a commit in their repository")
+        return 0
+    repo = Path(drafts[0].repo)
+    guard_archive(root, [repo])
+    es = EvalSet(root, args.set_name or repo.name)
+    folder = es.dir / "drafts"
+    folder.mkdir(parents=True, exist_ok=True)
+    for d in drafts:
+        (folder / f"{d.id}.yaml").write_text(dump_case(d))
+        i = d.extra["imported"]
+        print(f"{d.id}: {i['diff']}; written by {i['implementer_backend']}, ${i['cost_usd']}, "
+              f"{i['fix_rounds']} fix round(s)" + (", revised" if i["revision_notes"] else ""))
+    print(f"{len(drafts)} draft(s) in {folder}")
     return 0
 
 

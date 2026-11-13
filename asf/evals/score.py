@@ -9,6 +9,7 @@ same test file, the reference's version wins), and each hidden test file runs on
 
 from __future__ import annotations
 
+import contextlib
 import re
 import subprocess
 from pathlib import Path
@@ -176,7 +177,8 @@ def verbose(cmd: str) -> str:
 
 PYTEST_ID = re.compile(r"^(PASSED|FAILED|ERROR|XPASS|XFAIL|SKIPPED)\s+(\S+)", re.M)
 GO_ID = re.compile(r"^\s*--- (PASS|FAIL|SKIP): (\S+)", re.M)
-JS_ID = re.compile(r"^\s*([✓✔√×✕✗])\s+(.+?)(?:\s+\d+\s*m?s)?\s*$", re.M)
+JS_ID = re.compile(r"^\s*([✓✔√×✕✗✖])\s+(.+?)(?:\s+\(?\d+(?:\.\d+)?\s*m?s\)?)?\s*$", re.M)
+TAP_ID = re.compile(r"^(\s*)(not ok|ok) \d+ - (.+?)(?:\s+#\s*(SKIP|TODO).*)?$", re.M)
 
 
 def test_ids(output: str, file: str) -> dict[str, bool]:
@@ -195,13 +197,28 @@ def test_ids(output: str, file: str) -> dict[str, bool]:
         return out
     for mark, tid in JS_ID.findall(output):
         out[f"{file}::{tid.strip()}"] = mark in "✓✔√"
+    if out:
+        return out
+    for indent, status, tid, skip in TAP_ID.findall(output):
+        if not skip:
+            out[f"{file}::{'  ' * (len(indent) // 4)}{tid.strip()}"] = status == "ok"
     return out
 
 
 def run_hidden(case: Case, cfg: Config, root: Path, runnable: list[str]) -> tuple[dict[str, Any], str]:
     """Run each hidden test file (each go package once). Returns per-file and per-test results."""
+    with contextlib.ExitStack() as stack:
+        env = sandbox_env(cfg.get("execution.env"))
+        if case.needs_app:
+            # Browser tests run against the app started from the scored checkout (as the e2e gate does).
+            from ..apprun import running_app
+            env["ASF_APP_URL"] = stack.enter_context(running_app(cfg, root))
+        return _run_files(case, cfg, root, runnable, env)
+
+
+def _run_files(case: Case, cfg: Config, root: Path, runnable: list[str],
+               env: dict[str, str]) -> tuple[dict[str, Any], str]:
     timeout = cfg.get("execution.command_timeout_s", 900)
-    env = sandbox_env(cfg.get("execution.env"))
     files, log, tests, seen = [], [], {}, set()
     for path in runnable:
         how = command_for(case, cfg, path)
@@ -228,9 +245,33 @@ def run_hidden(case: Case, cfg: Config, root: Path, runnable: list[str]) -> tupl
         log.append(f"$ (cd {folder} && {cmd})  -> exit {res.code}\n{res.tail(8000)}\n")
     passed = sum(f["passed"] for f in files)
     total = sum(f["total"] for f in files)
-    return {"files": files, "tests": tests, "passed": passed, "total": total,
+    mismatch = interface_mismatch("\n".join(log))
+    return {"files": files, "tests": tests, "interface_mismatch": mismatch, "passed": passed, "total": total,
             "rate": round(passed / total, 3) if total else None,
             "all_pass": bool(files) and all(f["ok"] for f in files)}, "\n".join(log)
+
+
+# Hidden tests that fail because a name they use does not exist in the candidate: a different
+# interface, not wrong behaviour. Such runs cannot be scored fairly and are counted apart.
+MISMATCH = [
+    re.compile(r"\bundefined: ([\w.]+)"),                                   # go
+    re.compile(r"has no field or method (\w+)"),                           # go
+    re.compile(r"cannot import name '(\w+)'"),                             # python
+    re.compile(r"No module named '([\w.]+)'"),                             # python
+    re.compile(r"module '[\w.]+' has no attribute '(\w+)'"),               # python
+    re.compile(r"has no exported member '(\w+)'"),                         # typescript
+    re.compile(r"does not provide an export named '(\w+)'"),               # node esm
+    re.compile(r"Failed to (?:resolve|load) (?:import|url) \"([^\"]+)\""),  # vite / vitest
+]
+
+
+def interface_mismatch(log: str) -> list[str]:
+    names: list[str] = []
+    for pat in MISMATCH:
+        for m in pat.finditer(log):
+            if m.group(1) not in names:
+                names.append(m.group(1))
+    return names[:20]
 
 
 def against_check(hidden: dict[str, Any], check: dict[str, Any] | None) -> dict[str, Any]:

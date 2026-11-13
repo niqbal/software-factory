@@ -454,3 +454,16 @@ def test_cursor_variants_run_grok():
         assert {r["model"] for r in roles.values()} <= {"grok-4.7-low", "grok-4.7-medium", "grok-4.7-high"}
         assert roles["implementer"]["model"] == "grok-4.7-high"
         assert vs[name].backends({}) == ["cursor"]
+
+
+def test_interface_mismatch_is_detected_and_left_out_of_quality_numbers():
+    log = "./tok_test.go:12:5: undefined: encodeToken\nE   ImportError: cannot import name '_real_question'"
+    assert score.interface_mismatch(log) == ["encodeToken", "_real_question"]
+    ok = _result("v", "c1", 1)
+    mismatched = _result("v", "c2", 1, hidden=(0, 3))
+    mismatched["hidden"]["interface_mismatch"] = ["encodeToken"]
+    rep = report_mod.summarize([ok, mismatched])
+    s = rep["variants"]["v"]
+    assert s["interface_mismatch"] == 1 and s["metrics"]["resolved"]["n"] == 1
+    assert s["metrics"]["resolved"]["mean"] == 1.0 and s["metrics"]["cost_usd"]["n"] == 2
+    assert any("different interface" in f for f in rep["flags"])

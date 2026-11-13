@@ -55,7 +55,8 @@ def load_results(evalset: EvalSet, runs: list[str] | None = None,
 def sample_values(r: dict[str, Any]) -> dict[str, float | None]:
     """One run's measures, None where it does not apply."""
     h = r.get("hidden") or {}
-    has_hidden = h.get("rate") is not None
+    # A run whose hidden tests could not use its interface is not scored on them (see score.MISMATCH).
+    has_hidden = h.get("rate") is not None and not (h.get("interface_mismatch") and not h.get("all_pass"))
     all_pass = bool(h.get("all_pass"))
     visible = bool(r.get("visible_pass"))
     ft = r.get("gates_first_try")
@@ -116,6 +117,8 @@ def summarize(results: list[dict[str, Any]], baseline: str | None = None) -> dic
             "states": dict(Counter(r.get("final_state", "?") for r in ok)),
             "spent_usd": round(sum(float(r.get("cost_usd") or 0) for r in ok), 2),
             "cost_estimated": any(r.get("cost_estimated") for r in ok),
+            "interface_mismatch": sum(1 for r in ok if (r.get("hidden") or {}).get("interface_mismatch")
+                                      and not (r.get("hidden") or {}).get("all_pass")),
             "scored_per_file": sum(1 for r in ok if (r.get("hidden") or {}).get("scored") == "per file"),
             "repeat_noise": round(mean(spreads), 4) if spreads else None,
             "metrics": metrics,
@@ -143,6 +146,10 @@ def summarize(results: list[dict[str, Any]], baseline: str | None = None) -> dic
         if s["cost_estimated"]:
             flags.append(f"{v}: dollars are estimates from usd_per_mtok (Cursor reports tokens, not cost); "
                          "compare it on resolved rate and minutes.")
+        if s["interface_mismatch"]:
+            flags.append(f"{v}: {s['interface_mismatch']} run(s) left out of the hidden-test numbers: the hidden "
+                         "tests use names the candidate does not define (a different interface, not a wrong fix). "
+                         "Name the interface in those cases' acceptance criteria.")
         if s["scored_per_file"]:
             flags.append(f"{v}: {s['scored_per_file']} run(s) scored per file, not per test (no check data).")
     return {"generated": time.time(), "baseline": baseline, "variants": summary, "comparisons": comparisons,
