@@ -115,6 +115,30 @@ def test_reviewer_findings_loop_then_draft_pr_for_human(invoice_repo, state, sto
     assert any(e["type"] == "review.unresolved" for e in store.events(job_id))
 
 
+def test_fix_round_gets_major_findings_not_just_blockers(invoice_repo, state, store):
+    # A reviewer blocks on one thing and rates a real bug only "major". The fix round must hear about
+    # both; otherwise the major comes back as the next round's blocker after the last round is spent.
+    block_and_major = [[{"name": "submit_review", "input": {
+        "verdict": "request_changes", "summary": "Two problems",
+        "findings": [{"severity": "blocking", "file": "tests/test_discount.py", "issue": "tests only grep source"},
+                     {"severity": "major", "file": "invoice/totals.py", "line": 3, "issue": "race undoes scroll"},
+                     {"severity": "minor", "file": "invoice/totals.py", "issue": "skipped without node"},
+                     {"severity": "nit", "file": "invoice/totals.py", "issue": "indentation"}]}}]]
+    f = factory(invoice_repo, state, store,
+                provider(implementer=[IMPL, IMPL_AGAIN], tester=[TESTER, TESTER],
+                         reviewer=[block_and_major, APPROVE], security=[APPROVE, APPROVE]))
+    tasks = []
+    real_task = f._task
+    f._task = lambda job, *a, **k: tasks.append(real_task(job, *a, **k)) or tasks[-1]
+    job_id, _ = f.submit(item())
+    assert f.run_job(job_id) == "awaiting_review"
+    fix_round = [t for t in tasks if "needs changes" in t]
+    assert len(fix_round) == 1
+    assert "tests only grep source" in fix_round[0] and "race undoes scroll" in fix_round[0]
+    assert "skipped without node" in fix_round[0] and "indentation" not in fix_round[0]
+    assert store.job(job_id)["data"].get("unresolved_review") == []
+
+
 def test_budget_pause_and_resume(invoice_repo, state, store):
     f = factory(invoice_repo, state, store, provider(implementer=[IMPL, IMPL]),
                 **{"budgets.tier_2.usd": 0.0005})

@@ -757,15 +757,21 @@ class Factory:
         task = (work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
                 + f"\n\nRisk tier: {tier}. Deterministic gates already run:\n{gates}\n\n"
                   "Review the change in the working tree with show_diff.")
-        reviews, blocking = {}, []
+        reviews, blocking, should_fix, optional = {}, [], [], []
         for role in decision["llm"]:
             res = self._agent(self.store.job(job["id"]), role, task, tier)
             if not res.ok:
                 return self._needs_human(job, f"{role} did not finish its review")
             reviews[role] = res.data
             for f in res.data.get("findings", []):
-                if f.get("severity") == "blocking":
-                    blocking.append(f"- [{role}] {f.get('file')}:{f.get('line', '')} {f.get('issue')}")
+                line = f"- [{role}] {f.get('file')}:{f.get('line', '')} {f.get('issue')}"
+                sev = f.get("severity")
+                if sev == "blocking":
+                    blocking.append(line)
+                elif sev == "major":
+                    should_fix.append(line)
+                elif sev == "minor":
+                    optional.append(line)
             if res.data.get("verdict") == "request_changes" and not blocking:
                 blocking.append(f"- [{role}] requested changes: {res.data.get('summary')}")
         self.store.update_job(job["id"], reviews=reviews)
@@ -774,8 +780,15 @@ class Factory:
             return
         rounds = job["data"].get("review_rounds", 0)
         if rounds < self.cfg.get("limits.fix_rounds", 1):
-            self.store.update_job(job["id"], "implementing", review_rounds=rounds + 1,
-                                  feedback="\n".join(blocking))
+            # Only blocking findings decide whether the change goes back, but the fix round gets the
+            # majors too: a major left unfixed now tends to come back as the next round's blocker,
+            # after the last fix round has been spent on something else.
+            feedback = "Blocking (must fix):\n" + "\n".join(blocking)
+            if should_fix:
+                feedback += "\n\nMajor (fix these too):\n" + "\n".join(should_fix)
+            if optional:
+                feedback += "\n\nMinor (fix if it is cheap and safe):\n" + "\n".join(optional)
+            self.store.update_job(job["id"], "implementing", review_rounds=rounds + 1, feedback=feedback)
             return
         # Out of fix rounds. Deliver anyway as a draft PR so a human can see the change and decide
         # (merge, /revise, or reject); the unresolved findings keep the agent from ever merging it.
