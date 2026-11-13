@@ -127,66 +127,162 @@ def cmd_init(app: App) -> int:
 
 
 def cmd_doctor(app: App) -> int:
-    ok = True
-
-    def check(cond: bool, good: str, bad: str, fatal: bool = True) -> None:
-        nonlocal ok
-        print(("  ok    " if cond else ("  FAIL  " if fatal else "  warn  ")) + (good if cond else bad))
-        if not cond and fatal:
-            ok = False
-
+    from .setup_wizard import project_checks, ready
     cfg = app.cfg
     print(f"config: {cfg.source} (policy version {cfg.version_hash})")
-    check((app.repo / ".git").exists(), "git repository", f"{app.repo} is not a git repository")
-    from .util import run
-    check(run(["git", "-C", str(app.repo), "rev-parse", "--verify", cfg.default_branch], shell=False).ok,
-          f"default branch {cfg.default_branch} exists", f"default branch {cfg.default_branch} not found")
-    for p in cfg.packages:
-        for kind, cmd in p.commands.items():
-            exe = cmd.split()[0]
-            found = shutil.which(exe) or (app.repo / p.root / exe).exists()
-            check(bool(found), f"package {p.name}: {kind} -> {cmd}", f"package {p.name}: '{exe}' not on PATH")
-    for d in cfg.get("execution.clone_dirs", []):
-        check((app.repo / d).exists(), f"clone dir {d} present", f"clone dir {d} missing (run your install)",
-              fatal=False)
-    for kind in (cfg.get("intake") or {}):
-        try:
-            adapters.load("intake", kind)
-            check(True, f"intake adapter {kind}", "")
-        except KeyError as e:
-            check(False, "", str(e))
-    for cat, key in (("sandbox", "execution.provider"), ("delivery", "delivery.provider"),
-                     ("models", "models.provider")):
-        try:
-            adapters.load(cat, cfg.get(key))
-            check(True, f"{cat} adapter {cfg.get(key)}", "")
-        except KeyError as e:
-            check(False, "", str(e))
-    if cfg.get("models.provider") == "anthropic":
-        key_env = cfg.get("models.api_key_env", "ANTHROPIC_API_KEY")
-        check(bool(app.secret(key_env)), f"{key_env} available (value not shown)",
-              f"{key_env} not set; pass --env-file or export it", fatal=True)
-    elif cfg.get("models.provider") == "pool":
-        from .adapters.models.pool import PoolProvider
-        pool = PoolProvider(cfg.get("models") or {}, None)
-        for name, prov in pool.backends.items():
-            problem = prov.credentials_problem()
-            check(not problem, f"backend {name} ({prov.kind}) ready", f"backend {name}: {problem}", fatal=False)
-        for role in ("triage", "implementer", "tester", "reviewer", "security", "ci_fixer"):
-            print(f"  info  {role}: {' -> '.join(pool.order(role))}")
-    elif cfg.get("models.provider") == "claude_code":
-        from .adapters.models.claude_code import find_binary
-        b = find_binary(cfg.get("models") or {})
-        check(bool(b), f"Claude Code CLI at {b}", "Claude Code CLI not found: set models.binary or ASF_CLAUDE_BIN")
-    for st in cfg.get("deploy.steps") or []:
-        when = ", ".join(st.get("when") or []) or "every merge"
-        print(f"  info  deploy {st['name']}: {st.get('approval', 'owner')} approval, when {when}")
-    print(f"  info  shadow mode {'on' if cfg.get('autonomy.shadow') else 'off'}, max merge tier "
-          f"{cfg.get('autonomy.max_merge_tier')}, monthly cap ${cfg.get('budgets.monthly_cap_usd')}")
+    checks = project_checks(app.repo, app.state_dir, secret=app.secret, cfg=cfg)
+    print_checks([c for c in checks if c.id != "config"])
+    ok = ready(checks)
     if ok:
         app.register()
     print("healthy" if ok else "problems found")
     return 0 if ok else 1
+
+
+LABELS = {"ok": "  ok    ", "fail": "  FAIL  ", "warn": "  warn  ", "info": "  info  "}
+
+
+def print_checks(checks: list[Any], fixes: bool = False) -> None:
+    for c in checks:
+        print(f"{LABELS.get(c.status, '        ')}{c.label}" + (f": {c.detail}" if c.detail else ""))
+        if fixes and c.fix and c.status != "ok":
+            print(f"          fix: {c.fix}")
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    try:
+        answer = input(f"{prompt}{f' [{default}]' if default else ''}: ").strip()
+    except EOFError:
+        answer = ""
+    return answer or default
+
+
+def _yes(prompt: str, default: bool = False) -> bool:
+    answer = _ask(prompt + (" (Y/n)" if default else " (y/N)")).lower()
+    return default if not answer else answer.startswith("y")
+
+
+def _setup_options(args: argparse.Namespace) -> dict[str, Any]:
+    return {"name": args.name, "priority": args.priority, "backend": args.backend,
+            "github_issues": args.github_issues, "label": args.label, "write_back": args.write_back,
+            "github_prs": args.github_prs, "branch": not args.no_branch, "force": args.force}
+
+
+def _print_draft(d: dict[str, Any]) -> None:
+    s = d["summary"]
+    print(f"\nProject {s['name']} ({d['repo']}), default branch {s['default_branch']}")
+    print(f"  stacks: {', '.join(s['stacks']) or 'none detected'}; backend: {s['backend']}; "
+          f"delivery: {s['delivery']}; intake: {', '.join(s['intake'])}")
+    for p in s["packages"]:
+        cmds = ", ".join(f"{k}: {v}" for k, v in p["commands"].items()) or "no commands"
+        print(f"  package {p['name']} ({p['root']}): {cmds}")
+    print(f"  owner-only (tier 3) paths: {', '.join(s['owner_only_paths'][:8])}"
+          + (" ..." if len(s["owner_only_paths"]) > 8 else ""))
+    print(f"  agents read: {', '.join(s['instruction_files']) or 'no instruction files'}")
+    print("  shadow mode: nothing merges until you raise autonomy.max_merge_tier")
+    for w in d["warnings"]:
+        print(f"  warn  {w}")
+    for t in d["tips"]:
+        print(f"  tip   {t}")
+
+
+def _next_steps(result: dict[str, Any]) -> None:
+    repo = result["repo"]
+    print("\nNext:")
+    if result.get("branch"):
+        print(f"  review the draft:  git -C {repo} diff {result['summary']['default_branch']}...{result['branch']}")
+    print(f"  give it work:      asf --repo {repo} add --title \"...\" --accept \"...\"")
+    print("  open the console:  asf ui --open      (start the scheduler there)")
+
+
+def cmd_setup(app: App) -> int:
+    from . import setup_wizard as sw
+    sub = app.args.setup_cmd
+    if sub == "check" or (sub is None and not sys.stdin.isatty()):
+        checks = sw.machine_checks()
+        if getattr(app.args, "json", False):
+            print(json.dumps({"ready": sw.ready(checks), "checks": [c.as_dict() for c in checks]}, indent=2))
+        else:
+            print("This machine:")
+            print_checks(checks, fixes=True)
+            print("ready" if sw.ready(checks) else "not ready: fix the FAIL lines above")
+        return 0 if sw.ready(checks) else 1
+    if sub == "add":
+        repo = Path(app.args.path or app.args.repo).expanduser().resolve()
+        opts = _setup_options(app.args)
+        if app.args.print:
+            d = sw.draft(repo, opts)
+            print(json.dumps(d, indent=2) if app.args.json else d["yaml"])
+            return 0
+        result = sw.create(repo, opts)
+        if app.args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return 0 if result["healthy"] else 1
+        _print_draft(result)
+        print()
+        for n in result["notes"]:
+            print(f"  done  {n}")
+        print("\nProject checks:")
+        print_checks([sw.Check(**c) for c in result["checks"]], fixes=True)
+        _next_steps(result)
+        return 0 if result["healthy"] else 1
+    return _setup_wizard(app)
+
+
+def _setup_wizard(app: App) -> int:
+    from . import setup_wizard as sw
+    print("Software factory setup\n\n1. This machine")
+    checks = sw.machine_checks()
+    print_checks(checks, fixes=True)
+    if not sw.ready(checks):
+        print("\nFix the FAIL lines above, then run `asf setup` again.")
+        return 1
+    print("\n2. Add a project")
+    found = sw.candidate_repos()
+    for i, r in enumerate(found[:20], 1):
+        print(f"  {i:>2}) {r['path']}" + ("  (already added)" if r["project"] else ""))
+    pick = _ask("Repository: a number above or a path (Enter to skip)")
+    if not pick:
+        print("No project added. Run `asf setup add PATH` later, or use the console: asf ui --setup")
+        return 0
+    repo = Path(found[int(pick) - 1]["path"]) if pick.isdigit() and 0 < int(pick) <= len(found[:20]) \
+        else Path(pick).expanduser().resolve()
+    problem = sw.validate_repo(repo)
+    if problem:
+        print(problem)
+        return 1
+    opts: dict[str, Any] = {"name": _ask("Display name", repo.name),
+                            "priority": int(_ask("Priority (lower runs first)", "100") or 100)}
+    if _yes("Change the optional settings (backend, GitHub)?"):
+        opts["backend"] = _ask(f"Model backend ({'/'.join(sw.BACKENDS)})", "auto")
+        opts["github_issues"] = _yes("Take work from GitHub issues with a label?")
+        if opts["github_issues"]:
+            opts["label"] = _ask("Label", "factory")
+            opts["write_back"] = _yes("Comment results back on the issue?")
+        opts["github_prs"] = _yes("Deliver as GitHub draft pull requests (instead of local branches)?")
+        opts["branch"] = _yes("Commit the draft factory.yaml on branch factory/setup?", True)
+    d = sw.draft(repo, opts)
+    _print_draft(d)
+    if not _yes("\nAdd this project?", True):
+        print("Nothing written.")
+        return 0
+    result = sw.create(repo, opts)
+    for n in result["notes"]:
+        print(f"  done  {n}")
+    print("\n3. Project checks")
+    print_checks([sw.Check(**c) for c in result["checks"]], fixes=True)
+    print("\n4. Give it work")
+    title = _ask("First work item title (Enter to skip)")
+    if title:
+        accept = _ask("Acceptance criteria, separated by ';'")
+        sub_app = App(argparse.Namespace(**{**vars(app.args), "repo": str(repo), "state": None}))
+        job = sw.first_item(sub_app.factory, title, acceptance=accept.split(";"))
+        print(f"  queued {job}")
+    _next_steps(result)
+    if _yes("\nOpen the console now?", True):
+        from .ui import serve as serve_ui
+        serve_ui(8787, open_project=result["key"], open_browser=True, secrets=app.secret)
+    return 0
 
 
 def _fmt_issue_item(kind: str, item: WorkItem) -> str:
@@ -465,7 +561,8 @@ def cmd_ui(app: App) -> int:
     if app.args.repo != "." or (app.repo / "factory.yaml").exists():
         app.factory  # registers this repo's state dir so the console lists it
         open_project = app.state_dir.name
-    serve_ui(app.args.port, open_project=open_project, open_browser=app.args.open, secrets=app.secret)
+    serve_ui(app.args.port, open_project=open_project, open_browser=app.args.open or app.args.setup,
+             secrets=app.secret, fragment="setup" if app.args.setup else None)
     return 0
 
 
@@ -537,6 +634,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui = sub.add_parser("ui", help="local web console: observe jobs and act on them")
     p_ui.add_argument("--port", type=int, default=8787)
     p_ui.add_argument("--open", action="store_true", help="open the console in a browser")
+    p_ui.add_argument("--setup", action="store_true", help="open the console on its Set up page")
+    s = sub.add_parser("setup", help="check this machine and add a project (a wizard without arguments)")
+    ss = s.add_subparsers(dest="setup_cmd")
+    c = ss.add_parser("check", help="check this machine: Python, git, model backends, optional tools")
+    c.add_argument("--json", action="store_true")
+    a = ss.add_parser("add", help="add a repository as a project, with optional settings")
+    a.add_argument("path", nargs="?", help="the repository (default: --repo)")
+    a.add_argument("--name", help="display name in the console")
+    a.add_argument("--priority", type=int, help="lower runs first when projects share a subscription")
+    a.add_argument("--backend", default="auto", choices=["auto", "claude", "cursor", "pool", "anthropic"],
+                   help="model backend (auto: the signed-in CLIs on this machine)")
+    a.add_argument("--github-issues", action="store_true", help="take work from labelled GitHub issues")
+    a.add_argument("--label", default="factory", help="issue label for --github-issues")
+    a.add_argument("--write-back", action="store_true", help="comment results on the issue")
+    a.add_argument("--github-prs", action="store_true", help="deliver as GitHub draft pull requests")
+    a.add_argument("--no-branch", action="store_true", help="do not commit the draft on factory/setup")
+    a.add_argument("--force", action="store_true", help="replace an existing pending draft")
+    a.add_argument("--print", action="store_true", help="show the draft; write nothing")
+    a.add_argument("--json", action="store_true")
     for name in ("approve", "reject"):
         s = sub.add_parser(name)
         s.add_argument("job")
@@ -597,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     app = App(args)
     handlers = {
-        "init": cmd_init, "doctor": cmd_doctor, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
+        "init": cmd_init, "doctor": cmd_doctor, "setup": cmd_setup, "intake": cmd_intake, "add": cmd_add, "run": cmd_run,
         "status": cmd_status, "events": cmd_events, "report": cmd_report, "ui": cmd_ui,
         "approve": lambda a: cmd_approve(a, "approve"), "reject": lambda a: cmd_approve(a, "reject"),
         "deploy": cmd_deploy, "resume": cmd_resume, "retry": cmd_retry, "rerun": cmd_rerun, "answer": cmd_answer,

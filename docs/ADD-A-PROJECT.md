@@ -7,6 +7,15 @@ factory creates. One factory, one console and one scheduler serve every project.
 Projects already set up this way: `~/work/workflow-engine`, `~/work/gamedev` and this
 repository itself. Their `factory.yaml` files are worked examples.
 
+The fastest path is the guided setup, which does steps 0 to 5 for you:
+
+```bash
+scripts/install.sh --project ~/work/myapp --ui   # install, add the project, open the Set up page
+```
+
+or `asf setup` in a terminal, or **Set up** in the console. The steps below are what it does,
+for when you want to do them by hand.
+
 ## 0. Before the first project (once per machine)
 
 ```bash

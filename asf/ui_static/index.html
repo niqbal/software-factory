@@ -64,7 +64,7 @@ main{display:grid;grid-template-columns:minmax(0,430px) minmax(0,1fr);gap:14px;p
 .body{padding:14px 16px}
 .sec{margin-bottom:18px} .sec h4{margin:0 0 6px;font-size:13px}
 .callout{border-radius:8px;padding:10px 12px;margin-bottom:14px;white-space:pre-wrap}
-.callout.bad{background:var(--bad-bg)} .callout.warn{background:var(--warn-bg)} .callout.violet{background:var(--violet-bg)} .callout.ok{background:var(--ok-bg)}
+.callout.bad{background:var(--bad-bg)} .callout.info{background:var(--info-bg)} .callout.warn{background:var(--warn-bg)} .callout.violet{background:var(--violet-bg)} .callout.ok{background:var(--ok-bg)}
 table{border-collapse:collapse;width:100%;font-size:13px}
 .shots{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px} .shots img{max-width:220px;max-height:140px;border:1px solid var(--line);border-radius:6px}
 table.repro{table-layout:fixed} .repro td{vertical-align:top;overflow-wrap:anywhere} .repro th:first-child{width:80px}
@@ -101,6 +101,31 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
 .sched .line{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .prio{width:52px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit}
 .tag{font-size:11px;font-weight:600;color:var(--violet);background:var(--violet-bg);padding:1px 7px;border-radius:999px}
+/* set up */
+.setup{max-width:900px;margin:0 auto;padding:14px 20px 40px;display:flex;flex-direction:column;gap:14px}
+@media (max-width:600px){.setup{padding-left:12px;padding-right:12px}}
+.setup .intro h2{margin:0 0 4px;font-size:20px} .setup .intro p{margin:0;color:var(--muted)}
+.step h2 .num{display:inline-flex;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-ink);align-items:center;justify-content:center;font-size:11px;letter-spacing:0}
+.step.off{opacity:.55}
+.checks{display:flex;flex-direction:column}
+.check{display:grid;grid-template-columns:22px minmax(0,1fr);gap:2px 10px;padding:9px 14px;border-bottom:1px solid var(--line)}
+.check:last-child{border-bottom:none}
+.check .ic{font-weight:700;text-align:center} .check .ic.ok{color:var(--ok)} .check .ic.warn{color:var(--warn)} .check .ic.fail{color:var(--bad)} .check .ic.info{color:var(--muted)}
+.check .lb{font-weight:600} .check .dt{grid-column:2;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.check .fx{grid-column:2;display:flex;gap:6px;align-items:center;margin-top:3px;min-width:0}
+.check .fx code{background:var(--hover);padding:3px 7px;border-radius:5px;overflow-x:auto;white-space:nowrap;min-width:0;flex:1}
+.subhead{padding:8px 14px;font-size:12px;color:var(--muted);background:var(--bg);border-bottom:1px solid var(--line)}
+.form{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.form label{display:flex;flex-direction:column;gap:4px;font-weight:550;font-size:13px}
+.form label.inline{flex-direction:row;align-items:center;gap:8px;font-weight:450}
+.form input[type=text],.form input[type=number],.form select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink);min-width:0}
+.form .two{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px}
+@media (max-width:600px){.form .two{grid-template-columns:minmax(0,1fr)}}
+.repos{display:flex;gap:6px;flex-wrap:wrap}
+.repos button{font-size:12px;padding:3px 9px}
+.opts{border:1px solid var(--line);border-radius:8px} .opts summary{padding:8px 12px} .opts .form{padding-top:4px}
+.kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:4px 12px;font-size:13px} .kv b{font-weight:550;color:var(--muted)}
+@media (max-width:600px){.kv{grid-template-columns:minmax(0,1fr)}}
 </style>
 </head>
 <body>
@@ -114,6 +139,7 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
   <button id="workerBtn" class="primary">Run queue</button>
   <button id="pauseBtn" title="Kill switch: stop all agent work in this project">Pause</button>
   </span>
+  <button id="setupBtn" onclick="location.hash='#setup'" title="Check this machine and add a project">Set up</button>
   <button id="restartBtn" onclick="restartConsole()" title="Pull the latest main, then restart the console with a fresh environment (PATH, CLIs). Jobs carry on afterwards.">Restart console</button>
 </header>
 
@@ -124,6 +150,54 @@ textarea{width:100%;min-height:90px;font:inherit;padding:8px;border:1px solid va
     <div class="panel"><h2>Inbox: everything waiting on you <span class="n" id="nInbox"></span></h2><div class="list" id="inbox"></div></div>
     <div><div class="panel" style="border:none;background:none"><h2 style="border:none;padding-left:0">Projects</h2></div><div class="cards" id="cards" style="padding:0"></div></div>
   </div>
+</div>
+<div id="setupView" style="display:none">
+<div class="setup">
+  <div class="intro"><h2>Set up the factory</h2>
+    <p>You need Python, git and one signed-in model backend. Everything else is optional. Nothing here uses model time.</p></div>
+  <div class="panel step" id="stepMachine"><h2><span class="num">1</span> This machine <span class="n" id="machineState"></span></h2>
+    <div class="checks" id="machineChecks"><div class="empty">Checking…</div></div>
+    <div class="form" style="flex-direction:row;justify-content:flex-end"><button onclick="setupMachine()">Check again</button></div></div>
+  <div class="panel step" id="stepProject"><h2><span class="num">2</span> Add a project</h2>
+    <div class="form">
+      <div class="hint">A project is a git repository. The factory works in its own git worktrees and never touches your checkout.</div>
+      <label>Repository path <input type="text" id="suRepo" placeholder="~/work/myapp" autocomplete="off" spellcheck="false"></label>
+      <div class="repos" id="suRepos"></div>
+      <div class="two">
+        <label>Display name <input type="text" id="suName" placeholder="from the folder name"></label>
+        <label>Priority <input type="number" id="suPriority" min="1" value="100" title="Lower runs first when projects share a subscription"></label>
+      </div>
+      <details class="opts"><summary>Optional settings</summary><div class="form">
+        <label>Model backend <select id="suBackend">
+          <option value="auto">Auto: the signed-in CLIs on this machine (recommended)</option>
+          <option value="claude">Claude Code only</option>
+          <option value="cursor">Cursor only</option>
+          <option value="pool">Both: Cursor implements, Claude reviews, each covers the other's limits</option>
+          <option value="anthropic">Anthropic API key</option></select></label>
+        <label class="inline"><input type="checkbox" id="suIssues" onchange="$('suIssueOpts').style.display=this.checked?'':'none'"> Take work from GitHub issues with a label</label>
+        <div id="suIssueOpts" style="display:none;padding-left:24px" class="form">
+          <label>Label <input type="text" id="suLabel" value="factory"></label>
+          <label class="inline"><input type="checkbox" id="suWriteBack"> Comment results and questions back on the issue</label></div>
+        <label class="inline"><input type="checkbox" id="suPRs"> Deliver as GitHub draft pull requests (default: local branches)</label>
+        <label class="inline"><input type="checkbox" id="suBranch" checked> Commit the drafted factory.yaml on branch <code>factory/setup</code> for review</label>
+        <label class="inline"><input type="checkbox" id="suForce"> Replace an earlier draft for this repository</label>
+      </div></details>
+      <div class="actions"><button onclick="setupDraft()">Preview</button><button class="primary" id="suCreate" onclick="setupCreate()">Add project</button></div>
+    </div>
+    <div id="suPreview"></div></div>
+  <div class="panel step off" id="stepCheck"><h2><span class="num">3</span> Check the project <span class="n" id="projState"></span></h2>
+    <div class="checks" id="projChecks"><div class="empty">Add a project first.</div></div>
+    <div class="form" style="flex-direction:row;justify-content:flex-end" id="projBtns"></div></div>
+  <div class="panel step off" id="stepWork"><h2><span class="num">4</span> Give it work</h2>
+    <div class="form">
+      <div class="hint">Write acceptance criteria a test can check; vague items come back as questions. Later, work can also come from the project's inbox folder or a tracker.</div>
+      <div class="two"><label>Title <input type="text" id="wiTitle" placeholder="Round discounts half up"></label>
+        <label>Kind <select id="wiKind"><option>task</option><option>bug</option><option>feature</option><option>chore</option></select></label></div>
+      <label>Acceptance criteria, one per line <textarea id="wiAccept" placeholder="apply_discount(999, 15) returns 849"></textarea></label>
+      <label>Details (optional) <textarea id="wiBody" style="min-height:60px"></textarea></label>
+      <div class="actions"><button class="primary" onclick="setupItem()" id="wiBtn" disabled>Queue it</button><span class="hint" id="wiDone"></span></div>
+    </div></div>
+</div>
 </div>
 <div id="projectView">
 
@@ -415,7 +489,7 @@ function renderHome() {
         <div><b>${p.shipped}</b><span>shipped total</span></div>
         <div><b>${money(p.cost_per_shipped)}</b><span>per shipped job</span></div>
         <div><b>${Math.round((p.waste_share||0)*100)}%</b><span>waste</span></div>
-      </div></div>`; }).join('') || '<div class="empty">No projects yet. Run <code>asf --repo PATH init</code> in a repository.</div>';
+      </div></div>`; }).join('') || '<div class="empty">No projects yet. <a class="crumb" style="color:var(--accent)" href="#setup">Set up your first project</a>, or run <code>asf setup</code> in a terminal.</div>';
 }
 
 const MODE_HELP = {
@@ -445,8 +519,107 @@ function renderScheduler(sc) {
 async function schedSet(fields) { await post('/api/scheduler/settings', fields, 'scheduler'); }
 async function setPriority(key, v) { await post(`/api/projects/${key}/settings`, {priority: Number(v)}, 'priority'); }
 
+// ---- set up -------------------------------------------------------------------------------
+const MARK = {ok: '✓', warn: '!', fail: '✕', info: '·'};
+let SU = {key: null, repo: null};
+function checkRows(list, machine) {
+  return list.map(c => `<div class="check"><div class="ic ${c.status}">${MARK[c.status] || ''}</div>
+    <div class="lb">${esc(c.label)}${machine && !c.required ? ' <span class="hint">optional</span>' : ''}</div>
+    ${c.detail ? `<div class="dt">${esc(c.detail)}</div>` : ''}
+    ${c.fix && c.status !== 'ok' ? `<div class="fx"><code>${esc(c.fix)}</code><button class="small" onclick="copyText(this.previousElementSibling.textContent)">Copy</button></div>` : ''}</div>`).join('');
+}
+function copyText(t) { navigator.clipboard.writeText(t).then(() => toast('copied'), () => toast('copy failed', true)); }
+async function setupMachine() {
+  $('machineState').innerHTML = '<span class="chip"><span class="dot pulse"></span>checking</span>';
+  try {
+    const r = await api('/api/setup/machine');
+    const req = r.checks.filter(c => c.required), opt = r.checks.filter(c => !c.required);
+    const todo = req.filter(c => c.status === 'fail').length;
+    $('machineState').innerHTML = r.ready ? '<span class="chip ok">ready</span>' : `<span class="chip bad">${todo} to fix</span>`;
+    $('machineChecks').innerHTML = '<div class="subhead">Required</div>' + checkRows(req, true) + '<div class="subhead">Optional</div>' + checkRows(opt, true);
+    $('suCreate').disabled = !r.ready;
+  } catch (e) { $('machineState').innerHTML = `<span class="chip bad">${esc(e.message)}</span>`; }
+}
+async function setupRepos() {
+  try {
+    const r = await api('/api/setup/repos');
+    $('suRepos').innerHTML = r.repos.length ? '<span class="hint">Found:</span> ' + r.repos.slice(0, 24).map(x =>
+      `<button title="${esc(x.path)}" onclick="pickRepo('${esc(x.path).replace(/'/g, "\\'")}')">${esc(x.name)}${x.project ? ' ✓' : ''}</button>`).join('') : '';
+  } catch (e) { $('suRepos').innerHTML = ''; }
+}
+function pickRepo(path) { $('suRepo').value = path; $('suPreview').innerHTML = ''; }
+function setupOptions() {
+  return {name: $('suName').value.trim() || null, priority: $('suPriority').value ? Number($('suPriority').value) : null,
+    backend: $('suBackend').value, github_issues: $('suIssues').checked, label: $('suLabel').value.trim() || 'factory',
+    write_back: $('suWriteBack').checked, github_prs: $('suPRs').checked, branch: $('suBranch').checked, force: $('suForce').checked};
+}
+function draftView(d) {
+  const s = d.summary;
+  const pk = s.packages.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.root)}</td><td>${Object.entries(p.commands).map(([k, v]) => `<div><b>${esc(k)}</b> <code>${esc(v)}</code></div>`).join('') || '<span class="hint">no commands</span>'}</td></tr>`).join('');
+  return `<div class="body" style="border-top:1px solid var(--line)">
+    ${d.warnings.map(w => `<div class="callout warn">${esc(w)}</div>`).join('')}
+    ${d.tips.map(w => `<div class="callout info">${esc(w)}</div>`).join('')}
+    <div class="kv"><b>Project</b><span>${esc(s.name)} · ${esc(d.repo)} @ ${esc(s.default_branch)}</span>
+      <b>Stacks</b><span>${esc(s.stacks.join(', ') || 'none detected')}</span>
+      <b>Models</b><span>${esc(s.backend)}${Object.keys(s.roles).length ? ' · ' + Object.entries(s.roles).map(([r, m]) => `${esc(r)}: ${esc(m)}`).join(', ') : ''}</span>
+      <b>Work comes from</b><span>${esc(s.intake.join(', '))}</span>
+      <b>Delivers as</b><span>${s.delivery === 'github' ? 'GitHub draft pull requests' : 'local branches'}</span>
+      <b>Agents read</b><span>${esc(s.instruction_files.join(', ') || 'no instruction files')}</span>
+      <b>Owner-only paths</b><span>${esc(s.owner_only_paths.join(', '))}</span>
+      <b>Merging</b><span>shadow mode: nothing merges until you raise <code>autonomy.max_merge_tier</code></span></div>
+    <div class="sec" style="margin-top:12px"><h4>Packages and the commands gates run</h4><table><tr><th>Package</th><th>Root</th><th>Commands</th></tr>${pk || '<tr><td colspan="3" class="hint">none detected</td></tr>'}</table></div>
+    <details><summary style="padding:4px 0">factory.yaml draft</summary><pre style="margin-top:6px">${esc(d.yaml)}</pre></details></div>`;
+}
+async function setupDraft() {
+  const repo = $('suRepo').value.trim();
+  if (!repo) return toast('enter a repository path', true);
+  $('suPreview').innerHTML = '<div class="empty">Reading the repository…</div>';
+  try { $('suPreview').innerHTML = draftView(await api('/api/setup/draft', {repo, options: setupOptions()})); }
+  catch (e) { $('suPreview').innerHTML = `<div class="body"><div class="callout bad">${esc(e.message)}</div></div>`; }
+}
+async function setupCreate() {
+  const repo = $('suRepo').value.trim();
+  if (!repo) return toast('enter a repository path', true);
+  $('suCreate').disabled = true;
+  try {
+    const r = await api('/api/setup/create', {repo, options: setupOptions()});
+    $('suPreview').innerHTML = `<div class="body" style="border-top:1px solid var(--line)"><div class="callout ok">${r.notes.map(esc).join('\n')}</div></div>` + draftView(r);
+    SU = {key: r.key, repo: r.repo};
+    showProjectChecks(r);
+    toast(r.message);
+  } catch (e) { toast('add project: ' + e.message, true); }
+  $('suCreate').disabled = false;
+}
+function showProjectChecks(r) {
+  $('stepCheck').classList.remove('off'); $('stepWork').classList.remove('off'); $('wiBtn').disabled = false;
+  $('projState').innerHTML = r.healthy ? '<span class="chip ok">healthy</span>' : '<span class="chip bad">problems found</span>';
+  $('projChecks').innerHTML = checkRows(r.checks);
+  $('projBtns').innerHTML = `<button onclick="setupCheck()">Check again</button><button class="primary" onclick="location.hash='#p/${esc(r.key)}'">Open project</button>`;
+}
+async function setupCheck() {
+  try { showProjectChecks(await api('/api/setup/check', {key: SU.key})); } catch (e) { toast('check: ' + e.message, true); }
+}
+async function setupItem() {
+  const title = $('wiTitle').value.trim();
+  if (!title) return toast('a work item needs a title', true);
+  try {
+    const r = await api(`/api/p/${SU.key}/items`, {title, kind: $('wiKind').value, acceptance: $('wiAccept').value, body: $('wiBody').value});
+    $('wiDone').innerHTML = `Queued <a class="crumb" href="#p/${esc(SU.key)}/${esc(r.job)}">${esc(r.job)}</a>. Start the scheduler on the <a class="crumb" href="#">home page</a> to run it.`;
+    $('wiTitle').value = $('wiAccept').value = $('wiBody').value = '';
+  } catch (e) { toast('queue: ' + e.message, true); }
+}
+function showSetup() {
+  $('homeView').style.display = 'none'; $('projectView').style.display = 'none'; $('setupView').style.display = '';
+  $('projectControls').style.display = 'none';
+  $('repo').innerHTML = '<a class="crumb" href="#">All projects</a> / Set up'; $('policy').innerHTML = '';
+  P = null; selected = null; D = null;
+  if (!showSetup.loaded) { showSetup.loaded = true; setupMachine(); setupRepos(); }
+}
+
 // ---- routing -----------------------------------------------------------------------------
 function route() {
+  if (location.hash === '#setup') return showSetup();
+  $('setupView').style.display = 'none';
   const m = location.hash.match(/^#p\/([^/]+)(?:\/(.+))?/);
   const home = !m;
   $('homeView').style.display = home ? '' : 'none';
@@ -458,6 +631,7 @@ function route() {
   tick();
 }
 async function tick() {
+  if (location.hash === '#setup') return;
   if (!P) { try { H = await api('/api/portfolio'); renderHome(); } catch (e) { toast(e.message, true); } return; }
   await refresh();
   if (S) $('repo').innerHTML = `<a class="crumb" href="#">All projects</a> / ${esc(S.repo)} @ ${esc(S.default_branch)}`;

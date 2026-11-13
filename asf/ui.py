@@ -651,6 +651,29 @@ class Portfolio:
 NEEDS_YOU = {"awaiting_review", "awaiting_approval", "awaiting_deploy", "needs_human", "failed", "paused"}
 
 
+def setup_action(portfolio: Portfolio, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """The Set up page's writes: preview a draft, add a project, check a project."""
+    from . import setup_wizard as sw
+    opts = payload.get("options") or {}
+    if action == "draft":
+        return sw.draft(payload.get("repo") or "", opts)
+    if action == "create":
+        result = sw.create(payload.get("repo") or "", opts)
+        with portfolio.lock:  # a re-added project gets a fresh console, but never under a running job
+            c = portfolio.consoles.get(result["key"])
+            if c is not None and not c.busy and not c.current:
+                del portfolio.consoles[result["key"]]
+        return {**result, "message": f"added {result['summary']['name']}"}
+    if action == "check":
+        proj = next((p for p in portfolio.projects() if p.key == payload.get("key")), None)
+        if proj is None or not proj.available:
+            raise KeyError(payload.get("key"))
+        checks = sw.project_checks(proj.repo, proj.state_dir, secret=portfolio.secrets)
+        return {"key": proj.key, "repo": str(proj.repo), "healthy": sw.ready(checks),
+                "checks": [c.as_dict() for c in checks]}
+    raise KeyError(action)
+
+
 def make_handler(portfolio: Portfolio):
     page = (files("asf") / "ui_static" / "index.html").read_text()
 
@@ -680,6 +703,14 @@ def make_handler(portfolio: Portfolio):
                     return self._send(200, portfolio.scheduler.status())
                 if path == "/api/health":
                     return self._send(200, portfolio.health())
+                if path == "/api/setup/machine":
+                    from . import setup_wizard as sw
+                    checks = sw.machine_checks()
+                    return self._send(200, {"ready": sw.ready(checks), "checks": [c.as_dict() for c in checks],
+                                            "home": str(sw.asf_home())})
+                if path == "/api/setup/repos":
+                    from . import setup_wizard as sw
+                    return self._send(200, {"repos": sw.candidate_repos()})
                 if len(parts) >= 4 and parts[:2] == ["api", "p"]:
                     c = portfolio.console(parts[2])
                     if parts[3] == "state":
@@ -707,6 +738,8 @@ def make_handler(portfolio: Portfolio):
                     allowed = {k: payload[k] for k in ("name", "priority", "archived", "hidden") if k in payload}
                     set_entry(parts[2], **allowed)
                     return self._send(200, {"message": "saved"})
+                if parts[:2] == ["api", "setup"] and len(parts) == 3:
+                    return self._send(200, setup_action(portfolio, parts[2], payload))
                 if parts == ["api", "restart"]:
                     return self._send(200, {"message": portfolio.restart(now=bool(payload.get("now")))})
                 if parts == ["api", "scheduler", "start"]:
@@ -743,6 +776,14 @@ def make_handler(portfolio: Portfolio):
                 if rest == ["resume-all"]:
                     c.f.store.set_flag("paused_all", None)
                     return self._send(200, {"message": "resumed"})
+                if rest == ["items"]:
+                    from .setup_wizard import first_item
+                    acceptance = payload.get("acceptance") or []
+                    if isinstance(acceptance, str):
+                        acceptance = acceptance.splitlines()
+                    job_id = first_item(c.f, payload.get("title", ""), payload.get("body", ""), acceptance,
+                                        payload.get("kind") or "task")
+                    return self._send(200, {"message": f"queued {job_id}", "job": job_id})
                 if len(rest) == 3 and rest[0] == "backlog" and rest[2] == "queue":
                     return self._send(200, {"message": c.queue_item(rest[1])})
                 if len(rest) == 3 and rest[0] == "jobs":
@@ -756,7 +797,8 @@ def make_handler(portfolio: Portfolio):
     return Handler
 
 
-def serve(port: int, open_project: str | None = None, open_browser: bool = False, secrets: Any = None) -> None:
+def serve(port: int, open_project: str | None = None, open_browser: bool = False, secrets: Any = None,
+          fragment: str | None = None) -> None:
     portfolio = Portfolio(secrets)
     restarted = os.environ.pop("ASF_RESTART_NOTES", None)
     for attempt in range(20 if restarted is not None else 1):
@@ -768,7 +810,7 @@ def serve(port: int, open_project: str | None = None, open_browser: bool = False
                 raise
             time.sleep(0.5)  # just restarted: the old process's socket may not be gone yet
     portfolio.start_reconciler()
-    url = f"http://127.0.0.1:{port}/" + (f"#p/{open_project}" if open_project else "")
+    url = f"http://127.0.0.1:{port}/" + (f"#{fragment}" if fragment else f"#p/{open_project}" if open_project else "")
     print(f"factory console: {url}  (all projects under ~/.asf; Ctrl-C to stop)", flush=True)
     if restarted is not None:
         portfolio.scheduler._say(f"console restarted: {restarted or 'no notes'}")

@@ -17,6 +17,32 @@ work item ─▶ triage ─▶ implementer ─▶ independent tester ─▶ dete
 For a worked example of how the factory was built and what it did on a real backlog, see
 [docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md).
 
+## Set up in five minutes
+
+You need Python 3.11+, git, and one signed-in model backend: Claude Code (`claude auth login`),
+Cursor (`cursor-agent login`), or an Anthropic API key. Everything else is optional.
+
+```bash
+scripts/install.sh                          # venv, asf on PATH, machine check
+asf setup                                   # wizard: machine, add a project, first work item
+asf ui --setup                              # or the same flow in the browser
+```
+
+`install.sh --project ~/code/myapp` adds a project in the same run, `--ui` opens the console
+afterwards, and `--with-e2e` adds Playwright for browser checks. In scripts, use flags:
+
+```bash
+asf setup check [--json]                                   # exit 0 when the machine is ready
+asf setup add ~/code/myapp --name "My app" --priority 2    # detect, draft, register, check
+asf setup add ~/code/myapp --backend pool --github-issues --label factory --github-prs
+asf setup add ~/code/myapp --print                         # show the draft, write nothing
+```
+
+`setup add` drafts `factory.yaml` in shadow mode, commits it on `factory/setup` without touching
+your checkout, registers the project in the console, and runs the same checks as `doctor`.
+Where the factory fits among other agent tools, why its code is worse than an interactive Claude
+session today, and the plan: [docs/PARITY.md](docs/PARITY.md).
+
 ## Quick start for a new repository
 
 Step-by-step, for new and existing repositories: [docs/ADD-A-PROJECT.md](docs/ADD-A-PROJECT.md).
@@ -250,6 +276,7 @@ fix, the measured values, the reproducer's notes and its screenshots.
 | Command | What it does |
 |---|---|
 | `init [--name N] [--priority P]` | Setup agent: detects stacks, packages, test/lint/typecheck/build commands, dependency folders, risk-sensitive paths, trackers and the model CLIs installed here. Writes a pending config, commits it on `factory/setup` through a temporary worktree, and registers the project in the console. |
+| `setup [check \| add PATH]` | Guided setup. Without arguments, a terminal wizard; `check` checks the machine (Python, git, a signed-in model backend; optional Node, Playwright, GitHub CLI); `add` adds a project with options (`--backend`, `--github-issues`, `--github-prs`, `--name`, `--priority`, `--print`). The console's Set up page (`asf ui --setup`) does the same. |
 | `doctor` | Validates config, checks every command's executable, adapters and credentials. When healthy, registers the project. |
 | `intake [--source S] [--id ID] [--rerun]` | Pulls work items from enabled intake adapters. Deduplicates by source and id: an item that already has a job, finished or not, is skipped, so a labelled issue is never rebuilt by accident. `--rerun` starts a new job for an item whose last job has ended. |
 | `add --title ... [--accept ...]` | Queues a work item by hand. |
@@ -296,7 +323,7 @@ override any config value (CI uses this to switch delivery to GitHub).
 | Notify: console, Slack webhook. Observe: Sentry post-deploy gate | `adapters/notify/`, `adapters/observe.py` | Built; Slack and Sentry not run live |
 | Models: Anthropic with caching, effort per role, refusal fallbacks | `adapters/models/anthropic_provider.py` | Live-tested |
 | Models: Claude Code headless (`claude -p`), built-in tools off, tool calls as structured output, session resume | `adapters/models/claude_code.py` | Unit-tested with a fake CLI; live-tested on a two-turn tool loop |
-| Not built yet | | Planner task-graph decomposition (triage flags epics instead), embedding code index and per-repo memory, OpenAI and Google model adapters, hosted microVM sandboxes, dashboard UI |
+| Not built yet | | See the plan in [docs/PARITY.md](docs/PARITY.md): native Claude Code workers, hidden acceptance checks, earned autonomy, reviewer-burden metrics, per-project lessons, epic splitting |
 
 ## Adding an adapter
 

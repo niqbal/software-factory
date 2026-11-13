@@ -1,0 +1,254 @@
+# Where the factory fits, why its code is worse today, and the plan
+
+This page answers three questions.
+
+1. What does the rest of the industry already do, and which parts of `asf` are worth keeping?
+2. Why is code from an interactive Claude Code session better than code the factory writes
+   through `claude -p` with the same model?
+3. What do we build next, and what do we stop building?
+
+The short version: **asking an agent for a pull request is now a commodity, and it is the
+weakest part of `asf`. The parts few others do well are checking the agent's work
+independently, a trust policy the team owns, and measuring whether work really ships. The
+plan stops rebuilding the agent, runs Claude Code natively, and puts the effort into those three.**
+
+Survey as of November 2026. Most sources are vendor pages and blogs, not audits; they are
+listed at the end.
+
+## Part 1: the landscape
+
+| Category | Who | What they cover |
+|---|---|---|
+| Ticket in, PR out, from model and platform vendors | GitHub Copilot coding agent, OpenAI Codex cloud, Devin, Cursor Cloud Agents, Claude Code (`@claude` GitHub Action, Routines, background agents that open draft PRs, Managed Agents) | The agent loop, a hosted sandbox, a PR. A person reviews and merges. |
+| Reviewers sold separately | Anthropic Code Review (multi-agent PR review, launched March 2026), `@codex review`, CodeRabbit | Findings on a PR. |
+| Commercial factories | Factory.ai Droids (autonomy levels per environment, OpenTelemetry, audit logs), Warp Factories (a coordinating agent and stage agents, early access), Augment, Replit Agent | Intake, stages, sessions UI, enterprise controls, hosted. |
+| Open-source factories | Mastra Factory (Apache 2.0: GitHub, Linear or Slack to investigate, plan, implement, review, with a web UI), OpenHands (issue resolver, Agent Canvas), AgenticKode | The same stages, self-hosted. Mastra Factory is the closest match to `asf`. |
+| Running many agents at once | Conductor, Vibe Kanban, Sculptor (Terragon and Codegen shut down in 2026) | Parallel worktrees and a diff view on one machine. Tools, not factories. |
+| Factories with no human code review | StrongDM (scenarios the coding agents never see, behavioral clones of Okta, Slack, Jira), OpenAI's harness engineering (about a million lines written by Codex) | Proof that the hard part is the environment and the checks, not the agent. |
+
+**What is commodity, so we stop building it:** the agent loop and its tools, issue-to-PR
+plumbing, hosted sandboxes, running agents in parallel, a PR review bot.
+
+**What is still open, and where `asf` already leans:**
+
+1. **Checks the author cannot game.** SpecBench (May 2026 preprint) found agents can pass
+   every visible test while failing hidden ones, and the gap grows with code size. StrongDM's
+   whole design exists to stop this. `asf` has an independent tester, gates compared against
+   the base commit, browser proof before and after a fix, and locked reproduction tests. It
+   does not yet have checks the implementer never sees.
+2. **A trust policy the team owns.** Risk tiers, protected paths, test integrity and merge
+   rights in a reviewed file in the repository, the same whichever agent does the work.
+   Factory.ai's autonomy levels are proprietary and tied to its platform.
+3. **Measuring whether work ships.** One buyer's guide notes that no public benchmark measures
+   whether factories deliver, and says to measure reviewer burden per merged PR. `asf` already
+   counts only shipped work, cost per shipped job and waste.
+
+**Transparency on its own is not a gap.** Claude Code already emits OpenTelemetry events for
+every tool decision and result, runs hooks before a tool call that can block it, and writes a
+full transcript of every session. A factory on top of Claude Code can be fully audited without
+rebuilding the agent.
+
+## Part 2: why the factory's code is worse today
+
+The factory does not run Claude Code. It runs a model behind a home-made tool interface,
+without Claude Code's instructions, tools, project context, or the person who steers it.
+
+### A. The harness
+
+| # | Reason | Where | Effect |
+|---|---|---|---|
+| A1 | Claude Code's built-in tools are off (`--tools ""`). Tool calls are emulated as JSON forced by `--json-schema`. | `asf/adapters/models/claude_code.py:144` | Off the model's training distribution: fewer, clumsier tool calls; reasoning squeezed into a `text` field. |
+| A2 | Claude Code's instructions are replaced (`--system-prompt`) by about 30 lines of role prompt. | `claude_code.py:145`, `asf/agents/prompts/` | The habits that make interactive output good (read first, verify, don't over-engineer) are missing. |
+| A3 | Every tool round trip is a new `claude -p --resume` process in an empty temp folder, capped at 60 round trips. | `claude_code.py:87`, `asf/config.py:52` | Long tasks get cut off and nudged to finish. |
+| A4 | The shell is read-only: pipes, `$`, `python -c`, starting the app are all refused. | `asf/broker.py:25-33` | The agent cannot probe behaviour or reproduce a bug by hand. |
+| A5 | No subagents, todo list or plan mode. Search is `git grep` capped at 200 lines. | `--tools ""`, `broker.t_search` | Large tasks run in one linear conversation that fills with file dumps. |
+| A6 | Cursor runs the same JSON emulation, and this repo routes the implementer to Cursor first. | `cursor_cli.py:8-10`, `factory.yaml:94-95` | Much "Claude" output is not Claude. |
+
+### B. Context
+
+| # | Reason | Where | Effect |
+|---|---|---|---|
+| B1 | Instruction files share 12,000 characters, 6,000 per file. This repo's 22,000-character README is mostly cut. | `asf/agents/context.py:39-45` | Conventions and architecture notes are missing. |
+| B2 | No `CLAUDE.md` discovery: `--setting-sources ""` and a temp working folder. Nested and folder-level files never load. | `claude_code.py:146` | Folder-specific guidance never reaches the agent working there. |
+| B3 | No memory across jobs. Review findings, `/revise` notes and rejections teach nothing. | | The same mistakes recur. |
+| B4 | A ticket instead of a conversation. The only question the factory can ask is at triage. | `orchestrator._s_queued` | Plausible, wrong-shaped solutions that pass their own tests. |
+| B5 | Fix rounds start a new conversation instead of resuming the implementer's session. | `roles.run_agent` | The second attempt re-explores and fixes the symptom named in the finding. |
+
+### C. Checking its own work
+
+| # | Reason | Where | Effect |
+|---|---|---|---|
+| C1 | Only configured commands run. The implementer cannot start the app or look at a page. | `broker.t_run_check` | UI work is coded blind and judged by tests the same job wrote. |
+| C2 | One fix round by default. | `asf/config.py:78-79` | A second real defect goes straight to a human. |
+| C3 | Sandboxes get a minimal environment and no generated files, so tests fail for reasons unrelated to the change. | `asf/util.py:100-110`, `setup_agent.detect` | Wasted rounds, or a "pre-existing failure" verdict that hides a real one. |
+
+### D. Policy that trades quality for safety (deliberate; make each a conscious setting)
+
+Existing tests frozen above tier 0 (`broker._check_write`); "as small as possible", judged by a
+reviewer told to flag anything extra (`prompts/_common.md:7`); no new dependencies below tier 2;
+diff-size caps.
+
+## Part 3: the strategy
+
+1. **The agent is a replaceable worker.** `asf` drives Claude Code natively by default, with
+   Cursor and Codex as other workers. It never reimplements tools, sandboxes or review bots a
+   vendor already ships; it calls them through adapters.
+2. **`asf` owns what sits around the agent:** the policy file, checks the author cannot see,
+   the evidence and audit trail, the numbers on what ships, and the owner's review page.
+3. **Audit comes from the agent's own signals.** Claude Code hooks enforce the policy before
+   a tool runs; its OpenTelemetry events and transcripts become `asf`'s audit trail.
+4. **Autonomy is earned with data.** A tier is allowed to merge on its own only when the
+   numbers for that tier say so, and the owner approves the change to `factory.yaml`.
+
+## Part 4: the plan
+
+### Phase 0: measure (days)
+
+Without numbers, "better" is an opinion.
+
+- **Eval set:** 20 to 30 closed tickets from real projects, each with the merged solution as
+  reference. Kept in the private runs archive, never in product repositories.
+- **Scores per run:** gates pass on first try; reviewer blocking findings; owner revisions;
+  **hidden-test pass rate** (the reference solution's tests run against the factory's change);
+  **visible-versus-hidden gap** (the SpecBench measure of gaming); diff size against the
+  reference; minutes and list-price cost.
+- **Baselines:** the current harness, and interactive Claude Code given only the ticket text.
+- `asf eval run --set NAME --config VARIANT`, so every later phase is an A/B on the same set.
+
+### Phase 1: run Claude Code natively (1 to 2 weeks; the quality fix, and less code)
+
+The implementer, tester and CI fixer become real Claude Code sessions in the job's worktree.
+The broker stops executing tools and becomes the policy decision-maker.
+
+```
+claude -p --output-format stream-json
+  --append-system-prompt <role prompt>          # keep Claude Code's own instructions
+  --tools Read,Edit,Write,Glob,Grep,Bash,...    # plus the todo-list and subagent tools
+  --permission-mode dontAsk --allowedTools ...  # nothing prompts; anything unlisted is refused
+  --settings <generated: PreToolUse hook -> `asf policy-hook --job J --role R`>
+  --setting-sources project                     # CLAUDE.md, .claude/rules, skills from the repo
+  --json-schema <finish schema>                 # the final answer is still structured
+  cwd = the job's worktree, env = the scrubbed sandbox environment
+```
+
+- The hook calls the broker's existing checks (`_rel`, `_check_read`, `_check_write`,
+  `_check_command`), so protected paths, test integrity, the reproduction lock and the
+  dependency-folder rules keep working. `.claude/**` joins the protected paths.
+- Bash becomes a real shell. Network tools, installs and git writes stay denied, and Claude
+  Code's sandboxed Bash or the Docker sandbox contains the rest.
+- `stream-json` (or a `PostToolUse` hook) feeds the same `tool.call` events the console shows.
+- The deterministic gates still re-check the final diff, whatever the agent did.
+- Folded in: instruction budget raised to 60k with nested `CLAUDE.md`; implementer, tester and
+  CI fixer on Opus at `high`; two fix rounds; fix rounds resume the implementer's session.
+- Ships as `models.provider: claude_code_native` beside `claude_code`, behind the Phase 0 evals.
+  The JSON emulation stays only for backends without a usable native mode.
+- **Deleted afterwards:** most of `claude_code.py`'s tool protocol and the `t_*` tool executors
+  for native roles. The broker shrinks to policy.
+
+### Phase 2: checks the author cannot game (2 weeks; the main differentiator)
+
+- **Hidden acceptance checks.** At triage (or from the owner), acceptance criteria become
+  end-to-end checks stored in the state folder, outside the sandbox. The implementer and tester
+  never see them. After the gates, they run: browser checks through the existing reproducer for
+  UI, scripted checks for APIs and CLIs, and a model judge only where nothing deterministic fits.
+- **Score, not just pass or fail:** the share of hidden checks that hold, reported next to the
+  visible tests. A job whose visible tests pass but hidden checks fail goes back with the
+  evidence, never with the hidden check itself.
+- **Reproductions as a regression library.** Committed English reproductions and e2e tests
+  already accumulate, and every job already reruns the ones whose `covers:` paths it touches.
+  Their pass history becomes part of the numbers.
+- **Fakes for outside services, only where a project needs them** (StrongDM's behavioral
+  clones): a `fixtures:` entry in `factory.yaml` that starts a fake before checks run. Not
+  built until a project asks.
+
+### Phase 3: the policy you own, used by any agent (1 week)
+
+- `factory.yaml` stays the single, vendor-neutral policy. `asf` generates each worker's native
+  controls from it: Claude Code permissions and hooks first, other agents' equivalents where
+  they exist.
+- **Earned autonomy:** per tier, `asf report` tracks owner revisions, reverts and post-merge
+  failures. When a tier has been clean for N shipped jobs, the console proposes raising
+  `autonomy.max_merge_tier` as a ready-made diff for the owner to merge. It never raises it
+  itself.
+
+### Phase 4: numbers that say whether it works (1 week)
+
+- **Reviewer burden:** owner minutes per merged PR (time from opening the review to the
+  decision), and revisions per shipped job.
+- **Quality after merge:** reverts and post-merge check failures, per tier and per backend.
+- **Per backend and model:** cost per shipped job and the hidden-check score, so routing is
+  chosen on evidence.
+- A weekly report in the console and as Markdown.
+
+### Phase 5: plug in vendor pieces instead of building them (as needed)
+
+- Claude Code Review or `@codex review` as optional extra reviewers, with their findings in the
+  same review step.
+- Claude Code Routines, GitHub Actions or Managed Agents as places to run the factory, through
+  the existing runner mode, instead of more sandbox infrastructure of our own.
+
+### Phase 6: context and memory (later)
+
+- **Lessons per project**, proposed by `asf` when review findings or revision notes repeat, and
+  accepted by the owner with one click. Accepted lessons go into every prompt.
+- **Plan approval for tier 3:** the implementer writes a plan first, and the owner approves it
+  in the console before code is written.
+- **Splitting epics** into dependent work items instead of parking them.
+
+### Stopped or parked
+
+- New sandbox providers (microVMs, hosted sandboxes): use the vendors' (Phase 5).
+- A UI for running many agents in parallel: Conductor and Vibe Kanban do this.
+- Best-of-N implementations: an experiment once Phase 0 numbers exist, not a roadmap item.
+- More intake adapters than the projects in use need.
+
+### Success criteria
+
+| Metric | Today | Target |
+|---|---|---|
+| Hidden-test pass rate on the eval set | baseline (Phase 0) | at or above interactive Claude Code |
+| Visible-versus-hidden gap | baseline | under 5 points |
+| Gates pass on first try | baseline | interactive baseline + 10 points |
+| Owner revisions per shipped job | baseline | under 0.25 |
+| Owner minutes per merged PR | not measured | falling month over month |
+| Reverts after merge | not measured | none from agent-merged tiers |
+
+## Part 5: positioning
+
+For a team of 5 to 50 that already pays for Claude Code or Cursor: **autonomy you can prove,
+measured and controlled by the owner.** Agents from any vendor do the work; `asf` decides what
+they may touch, checks the result with tests they never saw, shows the evidence, and raises
+autonomy only when the numbers allow it.
+
+The main risk is that a vendor ships the same governance and hidden-check layer. Keeping the
+core small and every vendor behind an adapter keeps `asf` useful either way: if a vendor ships
+a better piece, it becomes another adapter.
+
+## Part 6: setup tooling (built)
+
+- `scripts/install.sh`: from a fresh clone to a working `asf` on PATH with the machine checked.
+  Options add the browser suite, a first project and the console.
+- `asf setup`: checks the machine (Python, git, a signed-in model backend; optional Node,
+  Playwright, GitHub CLI) and adds a project with optional settings, as a terminal wizard or
+  with flags.
+- The console's **Set up** page (`asf ui --setup`): the same checks and wizard in the browser,
+  with a preview of the drafted `factory.yaml`, a project health check and a form for the first
+  work item.
+
+## Sources
+
+- [Mastra: best software factory platforms (2026)](https://mastra.ai/articles/best-software-factory)
+- [Unblocked: AI software factory buyer's guide](https://getunblocked.com/blog/what-is-an-ai-software-factory-buyers-guide/)
+- [Hashnode: AI software factory, the hype and what ships](https://hashnode.com/blog/ai-software-factory)
+- [StrongDM Software Factory](https://factory.strongdm.ai/) and [Simon Willison's write-up](https://simonwillison.net/2026/Feb/7/software-factory)
+- [Stanford Law: Built by agents, tested by agents, trusted by whom?](https://law.stanford.edu/2026/02/08/built-by-agents-tested-by-agents-trusted-by-whom/)
+- [OpenAI: Harness engineering](https://openai.com/index/harness-engineering/)
+- [SpecBench: reward hacking in long-horizon coding agents](https://arxiv.org/abs/2605.21384)
+- [Factory.ai enterprise docs](https://docs.factory.ai/enterprise.md)
+- [OpenHands GitHub integration](https://docs.openhands.dev/enterprise/integrations/github)
+- [Augment: open-source agent orchestrators](https://www.augmentcode.com/tools/open-source-agent-orchestrators)
+- [TechCrunch: Anthropic launches Code Review](https://techcrunch.com/2026/03/09/anthropic-launches-code-review-tool-to-check-flood-of-ai-generated-code/)
+- [AI Catchup: Claude Code Routines](https://aicatchup.com/news/claude-code-routines)
+- [Claude Agent SDK observability](https://code.claude.com/docs/en/agent-sdk/observability)
+- [Runlayer: hooks versus OTLP for Claude Code](https://docs.runlayer.com/claude-code-otlp-monitoring.md)
+- [Microsoft: securing CI/CD with the Claude Code GitHub Action](https://www.microsoft.com/en-us/security/blog/2026/06/05/securing-ci-cd-in-agentic-world-claude-code-github-action-case/)
