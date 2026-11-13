@@ -271,6 +271,60 @@ Settings live under `repro:` (`model`, `effort`, `timeout_s`, `mcp_command`, `e2
 The console's Overview tab shows the evidence: both verdicts on the base commit and after the
 fix, the measured values, the reproducer's notes and its screenshots.
 
+## Evals: is the factory's code as good as an interactive session?
+
+`asf eval` measures the factory against tests it never sees, so every change to it (native
+Claude Code or Cursor sessions, models and effort, prompts) is an A/B test on the same task set.
+This is Phase 0 of [docs/PARITY.md](docs/PARITY.md).
+
+- **A case** is a repository, a base commit, the ticket exactly as its requester wrote it, and
+  the merged reference solution. The tests the reference added or changed are the case's
+  **hidden tests**: the factory's checkout holds only the history up to the base commit, so
+  neither it nor the baseline can find them.
+- **A variant** is a named overlay on the case's `factory.yaml`: `current` (unchanged),
+  `claude_code`, `opus-high`, `claude_code_native` and `cursor_native` (these two load once the
+  native providers are in the build), or your own file in the archive's `variants/` folder.
+  `interactive` is the baseline: plain `claude -p` with its default tools in the checkout, given
+  the ticket text and nothing else.
+- **A run** clones the case at its base commit, registers a throwaway project with the variant's
+  config and takes the ticket to delivery through the real pipeline in shadow mode, delivering
+  to a local branch: nothing merges and nothing is pushed. Then the hidden tests are written
+  over the factory's branch and run.
+
+Cases and results live only in the private runs archive (default `~/work/asf-runs/evals`, or
+`$ASF_EVALS`, or `--evals`), never in this repository or a product repository; `asf eval`
+refuses an archive inside either.
+
+```bash
+asf eval mine --repo ~/work/myapp --since 2026-01-01   # draft cases into sets/myapp/drafts/
+# rewrite each kept draft's ticket as its requester would have, move it to sets/myapp/cases/
+asf eval check --set myapp                             # hidden tests fail on base, pass on reference
+asf eval run --set myapp --config interactive --config claude_code --repeat 2
+asf eval report --set myapp                            # tables, plus reports/latest.{md,json}
+```
+
+`mine` keeps first-parent commits and merged pull requests that touch both code and tests,
+change under 400 lines, and reference an issue or have a descriptive message. Its tickets are
+drafted from the commit message (or the issue, with `--fetch-issues`) and marked
+`review: needed`: a commit message describes the solution, not the request, so a person
+rewrites each one before it counts.
+
+Each run records the final state, visible pass (the factory's own gates; for the baseline, the
+same gates run on what it left), hidden pass rate, diff size and files against the reference,
+dollars, minutes, gates passing on the first try, fix rounds and policy denials. The report shows
+per-variant means over cases with the number of cases behind each, the **visible-versus-hidden
+gap** (passes its own checks, fails the hidden tests: the reward-hacking signal), and
+differences against a baseline variant paired by case, each marked `likely real`,
+`within noise` (under two standard errors) or `too few cases`.
+
+`run` options: `--cases ID ...`, `--repeat K`, `--jobs N` (parallel runs; one at a time by
+default), `--max-usd` (stop starting runs past this spend), `--no-wait` (skip instead of waiting
+out a usage limit), `--keep` (keep checkouts under `$ASF_HOME/evals/work`). Per-job budgets are
+the variant's own; usage limits are shared with the scheduler (`asf/limits.py`). A case can set
+`test_command`, `setup` commands, `deps_from` (where `execution.clone_dirs` such as `.venv` are
+cloned from) and its own `config`; see `asf/evals/cases.py` for the format and
+`tests/evals/example_case.yaml` for a synthetic example.
+
 ## Commands
 
 | Command | What it does |
@@ -296,6 +350,7 @@ fix, the measured values, the reproducer's notes and its screenshots.
 | `serve [--worker]` | Webhook gateway with signature verification, job API, optional worker loop. |
 | `ci-workflow [--write]` | GitHub Actions workflow for runner mode. |
 | `adapters` | Lists installed adapters, including third-party ones registered by entry point. |
+| `eval mine \| check \| run \| report \| list` | The eval harness (see above): draft cases from history, validate their hidden tests, run variants, compare them. |
 
 Global flags: `--repo`, `--config`, `--state`, `--env-file`, and `--set key=value` to
 override any config value (CI uses this to switch delivery to GitHub).
@@ -323,6 +378,7 @@ override any config value (CI uses this to switch delivery to GitHub).
 | Notify: console, Slack webhook. Observe: Sentry post-deploy gate | `adapters/notify/`, `adapters/observe.py` | Built; Slack and Sentry not run live |
 | Models: Anthropic with caching, effort per role, refusal fallbacks | `adapters/models/anthropic_provider.py` | Live-tested |
 | Models: Claude Code headless (`claude -p`), built-in tools off, tool calls as structured output, session resume | `adapters/models/claude_code.py` | Unit-tested with a fake CLI; live-tested on a two-turn tool loop |
+| Eval harness: cases with hidden tests, variants as config overlays, interactive baseline, report with the visible-versus-hidden gap | `asf/evals/` | Tested with the scripted provider and a fake `claude`; smoke-run live on a real case |
 | Not built yet | | See the plan in [docs/PARITY.md](docs/PARITY.md): native Claude Code workers, hidden acceptance checks, earned autonomy, reviewer-burden metrics, per-project lessons, epic splitting |
 
 ## Adding an adapter
