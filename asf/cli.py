@@ -591,6 +591,11 @@ def cmd_adapters(app: App) -> int:
     return 0
 
 
+def cmd_eval(app: App) -> int:
+    from .evals import commands as eval_commands
+    return eval_commands.handle(app.args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="asf", description="Agentic software factory")
     p.add_argument("--repo", default=".", help="target repository (default: current directory)")
@@ -706,6 +711,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--write", action="store_true")
     s.add_argument("--install")
     sub.add_parser("adapters", help="list available adapters")
+    from .evals import commands as eval_commands
+    eval_commands.add_parser(sub)
     return p
 
 
@@ -720,7 +727,7 @@ def main(argv: list[str] | None = None) -> int:
         "repro": cmd_repro, "e2e": cmd_e2e, "allow-repro-edit": cmd_allow_repro_edit, "revise": cmd_revise, "publish": cmd_publish,
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
-        "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters,
+        "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters, "eval": cmd_eval,
     }
     try:
         return handlers[args.cmd](app)

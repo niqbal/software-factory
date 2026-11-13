@@ -102,7 +102,7 @@ diff-size caps.
 
 ## Part 4: the plan
 
-### Phase 0: measure (days)
+### Phase 0: measure (built: `asf eval`)
 
 Without numbers, "better" is an opinion.
 
@@ -114,6 +114,44 @@ Without numbers, "better" is an opinion.
   reference; minutes and list-price cost.
 - **Baselines:** the current harness, and interactive Claude Code given only the ticket text.
 - `asf eval run --set NAME --config VARIANT`, so every later phase is an A/B on the same set.
+
+What was built (`asf/evals/`, usage in the README's Evals section):
+
+- **Cases** are YAML in `~/work/asf-runs/evals/sets/<set>/cases/`: repository, base commit,
+  the ticket as written (title, body, acceptance criteria if any), reference commit. The hidden
+  tests are the test files the reference adds or changes; `asf eval check` confirms they fail on
+  the base commit and pass on the reference. The harness refuses an archive inside this
+  repository or a product repository.
+- **Mining:** `asf eval mine --repo PATH [--since DATE] [--limit N]` drafts cases from
+  first-parent history (a merged PR is one unit) that touch code and tests, change under 400
+  lines and reference an issue or have a descriptive message. Drafts are marked
+  `review: needed`; a person rewrites the ticket as the requester would have and prunes.
+- **Runs:** each case x variant x repeat gets its own clone holding only the base commit's
+  history (no remote, no reference), a throwaway project in its own state folder, and one local
+  work item, driven by `Factory.run_job` in shadow mode with local-branch delivery. Transient
+  failures retry as the scheduler would; usage limits are waited out (or skipped with
+  `--no-wait`); per-job budgets apply and `--max-usd` caps the run. `--jobs N` runs in parallel.
+  Scoring writes the reference's test files over the factory's branch and runs each hidden test
+  file on its own.
+- **Variants** are `factory.yaml` overlays: `current`, `claude_code`, `opus-high`,
+  `claude_code_native`, `cursor_native`, or a file in the archive's `variants/`. A variant whose
+  provider this build lacks is reported and skipped. `interactive` runs `claude -p` with its
+  default tools (Bash allowed, edits accepted) in the checkout on the ticket text alone, then
+  the same deterministic gates decide its visible pass.
+- **Report:** `asf eval report --set NAME` prints and writes (`reports/latest.{md,json}`)
+  per-variant means over cases with case counts: resolved, hidden pass rate, visible pass, the
+  visible-versus-hidden gap, gates first try, size against the reference, fix rounds, denials,
+  dollars and minutes. Differences against the baseline are paired by case and marked
+  `likely real`, `within noise` (under two standard errors) or `too few cases` (under three);
+  fewer than 10 cases and no repeats are flagged.
+- **First live run** (2026-11-13, run `smoke-20261113`): two small cases from this repository's
+  own history, variant `claude_code`, run in parallel. Both were delivered in shadow mode with
+  every hidden test passing and no gate failures ($5.28 list price, 6 and 8 minutes). Two cases
+  prove only that the harness works end to end, not how good the factory is.
+- Known limit: the hidden pass rate counts every test in a hidden file, including ones that
+  already passed on base, so `resolved` (all hidden tests pass) is the measure to compare.
+- Not yet scored: reviewer blocking findings are recorded per run, but owner revisions need a
+  human in the loop and are left to Phase 4.
 
 ### Phase 1: run Claude Code natively (1 to 2 weeks; the quality fix, and less code)
 

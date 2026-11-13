@@ -1,0 +1,13 @@
+# A tiny synthetic eval case, used by tests/test_evals.py with a repository the test builds.
+# Real cases live only in the private runs archive (~/work/asf-runs/evals/sets/<set>/cases/),
+# never in this repository or in a product repository. {placeholders} are filled by the test.
+id: invoice-discount-rounding
+repo: "{repo}"
+base: "{base}"
+reference: "{reference}"
+ticket:
+  title: Discount truncates instead of rounding
+  body: |
+    apply_discount(999, 50) returns 499. A half cent should round up, so it should be 500.
+  kind: bug
+notes: Synthetic. The reference fixes apply_discount and adds tests/test_discount.py (the hidden tests).
