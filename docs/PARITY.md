@@ -144,6 +144,12 @@ What was built (`asf/evals/`, usage in the README's Evals section):
   dollars and minutes. Differences against the baseline are paired by case and marked
   `likely real`, `within noise` (under two standard errors) or `too few cases` (under three);
   fewer than 10 cases and no repeats are flagged.
+- **First live run** (2026-11-13, run `smoke-20261113`): two small cases from this repository's
+  own history, variant `claude_code`, run in parallel. Both were delivered in shadow mode with
+  every hidden test passing and no gate failures ($5.28 list price, 6 and 8 minutes). Two cases
+  prove only that the harness works end to end, not how good the factory is.
+- Known limit: the hidden pass rate counts every test in a hidden file, including ones that
+  already passed on base, so `resolved` (all hidden tests pass) is the measure to compare.
 - Not yet scored: reviewer blocking findings are recorded per run, but owner revisions need a
   human in the loop and are left to Phase 4.
 
