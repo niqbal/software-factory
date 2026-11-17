@@ -46,6 +46,13 @@ def render_report(job: dict[str, Any], item: WorkItem, runs: list[dict[str, Any]
         lines += ["### Acceptance criteria", ""]
         lines += [f"- [{'x' if c in met else ' '}] {c}" for c in acc]
         lines += [""]
+    assumed = d.get("assumptions") or []
+    if assumed:
+        lines += ["### Assumptions", "",
+                  "The item left these open; the factory chose as below instead of stopping to ask. "
+                  "Correct any that are wrong with a revision request:", ""]
+        lines += [f"- {a}" for a in assumed]
+        lines += [""]
     manual = d.get("manual_verification") or []
     if manual:
         lines += ["### Manual verification before merge", "",

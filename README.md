@@ -188,6 +188,13 @@ queued -> triaged -> [reproducing] -> implementing -> testing -> verifying -> [c
   -> done     (shipped: merged, verified, deployed, post-deploy gate held; the only output)
 ```
 
+**Triage asks only what the requester must decide.** Where an item leaves something open that
+an engineer would settle by judgement, triage records an assumption ("Assumed: ...") and the
+job goes on: the implementer, tester and reviewer follow it, and the delivery report lists it
+under **Assumptions** for the owner to correct with a revision. A job stops with "clarification
+needed" only for product or policy decisions where a wrong guess is costly to undo, never for
+what the code can answer.
+
 The factory notices a merge however it was made, and a deleted branch counts as abandoned.
 `asf report` (and the console) count only shipped work: cost per shipped job is all spend
 divided by shipped jobs, abandoned spend is reported as waste, and lead time is split into
@@ -445,7 +452,11 @@ new adapter and a line in `factory.yaml`.
 - Commands run with a scrubbed environment: no API keys, tokens or cloud credentials are
   inherited. Secret-looking files cannot be read, and tool output is redacted.
 - `factory.yaml`, CI config and secret files are protected paths. Existing tests cannot be
-  edited or deleted above tier 0, and the tester role can write only test files.
+  edited or deleted above tier 0, and the tester role can write only test files. "Tests" here
+  means files that define tests (by name, or by containing `def test_`, `test(`, `func Test`...).
+  Test support under the test folders that defines none (in-memory fakes, helpers, fixtures)
+  may change with the code it stands in for; `test_integrity` names such changes for the
+  reviewer. `permissions.implementer.may_edit_test_support: false` freezes them too.
 - The local worktree sandbox does not block network access, and tests execute code the
   agent wrote. Use the Docker provider or a CI runner where that matters.
 

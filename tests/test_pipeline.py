@@ -326,3 +326,29 @@ def test_native_sessions_resume_on_fix_rounds_and_get_the_budget(invoice_repo, s
     assert 0 < usd <= 5 and 0 < minutes <= 90
     sessions = store.job(job_id)["data"]["native_sessions"]
     assert sessions["implementer"]["id"] != "S-implementer-1"  # the fix round's session is now the latest
+
+
+def test_triage_assumptions_reach_the_agents_and_the_report(invoice_repo, state, store):
+    """Triage settles open points with stated assumptions instead of stopping to ask; the
+    implementer, tester and reviewer see them and the owner reads them in the report."""
+    triage = {**TRIAGE, "assumptions": ["Assumed: negative percents are out of scope"]}
+    prov = ScriptedProvider({"scripts": {"implementer": [IMPL], "tester": [TESTER], "reviewer": [APPROVE],
+                                         "security": [APPROVE]}, "structured": {"triage": triage}})
+    seen: list[str] = []
+    real = prov.conversation
+
+    def recording(model, system, tools, effort="medium", max_tokens=16000):
+        conv = real(model, system, tools, effort, max_tokens)
+        add = conv.add_user
+        conv.add_user = lambda text: (seen.append(text), add(text))[1]
+        return conv
+
+    prov.conversation = recording
+    f = factory(invoice_repo, state, store, prov)
+    job_id, _ = f.submit(item())
+    assert f.run_job(job_id) == "awaiting_review"
+    job = store.job(job_id)
+    assert job["data"]["assumptions"] == ["Assumed: negative percents are out of scope"]
+    assert sum("negative percents are out of scope" in t for t in seen) >= 3  # implementer, tester, reviewer
+    report = open(job["data"]["report"]).read()
+    assert "### Assumptions" in report and "negative percents are out of scope" in report

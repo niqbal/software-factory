@@ -132,7 +132,8 @@ class ToolBroker:
                          "structure), call finish with blocked_reason 'repro test needs changing: <why>' so "
                          "the owner can approve it")
         is_test = self.cfg.is_test_path(rel)
-        existed = self.sb.file_at_base(rel) is not None
+        base_text = self.sb.file_at_base(rel)
+        existed = base_text is not None
         if self.role in ("reviewer", "security"):
             raise Denied("reviewers cannot modify files")
         if self.role == "tester" and not is_test:
@@ -141,9 +142,10 @@ class ToolBroker:
         if is_test and existed:
             if deleting:
                 raise Denied(f"deleting existing test {rel} is never allowed")
-            if not policy.may_edit_existing_tests(self.cfg, self.tier):
+            if policy.frozen_test(self.cfg, self.tier, rel, base_text):
                 raise Denied(f"{rel} is an existing test; at tier {self.tier} agents add tests "
-                             "rather than edit existing ones")
+                             "rather than edit existing ones (test helpers, fakes and fixtures that "
+                             "define no tests may be edited)")
         if self.role == "ci_fixer" and rel not in self.state.touched \
                 and len(self.state.touched) >= self.max_touch:
             raise Denied(f"ci_fixer may touch at most {self.max_touch} files")
