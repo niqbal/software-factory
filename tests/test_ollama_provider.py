@@ -72,3 +72,17 @@ def test_gives_up_after_retries(server):
     conv.add_user("go")
     with pytest.raises(OllamaError):
         conv.step()
+
+
+def test_old_tool_results_are_trimmed_to_fit_the_context():
+    p = OllamaProvider({"base_url": "http://127.0.0.1:9", "num_ctx": 1000, "context_fill": 0.5})
+    conv = p.conversation("m", "SYSTEM", TOOLS)
+    big = "x" * 900
+    for k in range(6):
+        conv.messages.append({"role": "user", "content": f'<tool_result id="call_{k}" error="false">\n{big}\n</tool_result>'})
+        conv.messages.append({"role": "assistant", "content": '{"text": "", "tool_calls": []}'})
+    conv.fit()
+    contents = [m["content"] for m in conv.messages]
+    assert sum(map(len, contents)) <= 1000 * 0.5 * 3.2 + 2000          # back near the budget
+    assert "older result removed" in contents[1] and big in contents[-2]  # oldest trimmed, newest kept
+    assert all(set(m) == {"role", "content"} for m in conv.messages)    # nothing extra sent to Ollama

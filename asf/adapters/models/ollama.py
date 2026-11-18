@@ -10,6 +10,7 @@ Settings (factory.yaml, under `models:`):
     provider: ollama
     base_url: http://localhost:11434   # or env OLLAMA_HOST
     num_ctx: 32768                     # context window; Ollama's default is far too small for an agent
+    context_fill: 0.6                  # past this share of num_ctx, the oldest tool results are trimmed
     timeout_s: 1800                    # per turn
     retries: 2
     think: auto                        # auto: think except at low effort; true / false to force
@@ -22,12 +23,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
 
 from ..base import AdapterContext, Conversation, ModelProvider, ModelTurn, ToolCall, ToolSpec
 from .claude_code import PROTOCOL, TURN_SCHEMA
+
+
+CHARS_PER_TOKEN = 3.2      # a cautious average for code
+KEEP_RECENT = 4            # the newest messages are never trimmed
+ELIDED = re.compile(r'(<tool_result id="[^"]*" error="[^"]*">)\n.*?\n</tool_result>', re.S)
 
 
 class OllamaError(RuntimeError):
@@ -55,6 +62,7 @@ class OllamaConversation(Conversation):
         self.messages: list[dict[str, str]] = [{"role": "system", "content": system + PROTOCOL + specs}]
         self.pending: list[str] = []
         self.n = 0
+        self.elided: set[int] = set()
 
     def add_user(self, text: str) -> None:
         self.pending.append(text)
@@ -66,6 +74,7 @@ class OllamaConversation(Conversation):
     def step(self) -> ModelTurn:
         self.messages.append({"role": "user", "content": "\n\n".join(self.pending) or "Continue."})
         self.pending = []
+        self.fit()
         usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         last = ""
         for _ in range(self.p.retries + 1):
@@ -93,6 +102,23 @@ class OllamaConversation(Conversation):
         raise OllamaError(f"no valid reply after {self.p.retries + 1} tries: {last}")
 
 
+    def fit(self) -> None:
+        """Keep the conversation inside the context window: once it passes `fill` of num_ctx, the
+        oldest tool results (file reads, test output) are replaced by a stub, newest kept, until it
+        fits. Without this a long fix round overflows and the model's reply is cut off."""
+        budget = int(self.p.num_ctx * self.p.fill * CHARS_PER_TOKEN)
+        size = sum(len(m["content"]) for m in self.messages)
+        for i, m in enumerate(self.messages[:-KEEP_RECENT]):
+            if size <= budget:
+                return
+            if i and m["role"] == "user" and "<tool_result" in m["content"] and i not in self.elided:
+                stub = ELIDED.sub(lambda r: f'{r.group(1)}\n(older result removed to fit the context; '
+                                  f'run the tool again if you need it)\n</tool_result>', m["content"])
+                size -= len(m["content"]) - len(stub)
+                m["content"] = stub
+                self.elided.add(i)
+
+
 class OllamaProvider(ModelProvider):
     kind = "ollama"
 
@@ -105,6 +131,7 @@ class OllamaProvider(ModelProvider):
         self.retries = int(self.settings.get("retries", 2))
         self.think = self.settings.get("think", "auto")
         self.keep_alive = str(self.settings.get("keep_alive", "30m"))
+        self.fill = float(self.settings.get("context_fill", 0.6))  # share of num_ctx the history may use; the rest is for thinking and the reply
 
     def credentials_problem(self) -> str | None:
         try:
