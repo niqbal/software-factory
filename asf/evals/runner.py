@@ -64,6 +64,7 @@ class Options:
     sleep: Callable[[float], None] = time.sleep
     spent: float = 0.0
     force: bool = False
+    resume: bool = False
     checks: dict[str, dict[str, Any]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -113,10 +114,20 @@ def run_set(evalset: EvalSet, variants: list[Variant], cases: list[Case], opts: 
         raise EvalError("no case passed its check")
     opts.checks = checks
     run_dir.mkdir(parents=True, exist_ok=True)
+    if opts.resume:
+        # Finished runs are kept and their spend counts toward --max-usd.
+        opts.spent += sum(float(r.get("cost_usd") or 0) for r in _finished(run_dir))
     meta = {"run_id": opts.run_id, "set": evalset.name, "started": time.time(), "asf": code_version(),
             "variants": {v.name: {"kind": v.kind, "hash": v.hash, "source": v.source} for v in runnable},
             "cases": [c.id for c in cases], "repeat": opts.repeat, "jobs": opts.jobs, "max_usd": opts.max_usd}
-    (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
+    meta_path = run_dir / "run.json"
+    if opts.resume and meta_path.exists():
+        prev = json.loads(meta_path.read_text())
+        meta["started"] = prev.get("started", meta["started"])
+        meta["variants"] = {**prev.get("variants", {}), **meta["variants"]}
+        meta["cases"] = sorted(set(prev.get("cases", [])) | set(meta["cases"]))
+        meta["repeat"] = max(int(prev.get("repeat") or 1), opts.repeat)
+    meta_path.write_text(json.dumps(meta, indent=1))
     tasks = [(c, v, k) for k in range(1, opts.repeat + 1) for c in cases for v in runnable]
     opts.echo(f"eval run {opts.run_id}: {len(cases)} case(s) x {len(runnable)} variant(s) x {opts.repeat} "
               f"= {len(tasks)} run(s), {opts.jobs} at a time; results in {run_dir}")
@@ -135,6 +146,26 @@ def run_set(evalset: EvalSet, variants: list[Variant], cases: list[Case], opts: 
     return results
 
 
+def _finished(run_dir: Path) -> list[dict[str, Any]]:
+    out = []
+    for f in run_dir.glob("*/*/result.json"):
+        r = json.loads(f.read_text())
+        if r.get("finished") and not r.get("skipped") and not r.get("error"):
+            out.append(r)
+    return out
+
+
+def _wait_while_paused(run_dir: Path, tag: str, opts: Options) -> None:
+    """A file named PAUSE in the run folder holds back new runs (runs already going finish).
+    Used to keep a share of a backend's quota for other work: create it to pause, delete it to go on."""
+    told = False
+    while (run_dir / "PAUSE").exists():
+        if not told:
+            opts.echo(f"{tag} paused: {run_dir / 'PAUSE'} exists")
+            told = True
+        opts.sleep(30)
+
+
 def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Options) -> dict[str, Any]:
     tag = f"[{variant.name} {case.id} r{k}]"
     lines: list[str] = []
@@ -150,6 +181,12 @@ def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Option
                               "run_id": opts.run_id, "set": evalset.name, "variant_hash": variant.hash,
                               "tags": case.tags, "reference_by": case.reference_by,
                               "started": time.time()}
+    done = out_dir / "result.json"
+    if opts.resume and done.exists():
+        prev = json.loads(done.read_text())
+        if prev.get("finished") and not prev.get("skipped") and not prev.get("error"):
+            return prev
+    _wait_while_paused(evalset.runs_dir / opts.run_id, tag, opts)
     with opts._lock:
         over = opts.max_usd is not None and opts.spent >= opts.max_usd
     if over:

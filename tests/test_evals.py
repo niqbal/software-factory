@@ -467,3 +467,21 @@ def test_interface_mismatch_is_detected_and_left_out_of_quality_numbers():
     assert s["interface_mismatch"] == 1 and s["metrics"]["resolved"]["n"] == 1
     assert s["metrics"]["resolved"]["mean"] == 1.0 and s["metrics"]["cost_usd"]["n"] == 2
     assert any("different interface" in f for f in rep["flags"])
+
+
+def test_resume_keeps_finished_runs_counts_their_spend_and_honours_pause(home, archive, tmp_path):
+    binary = fake_claude(tmp_path, FIX)
+    v = variants.Variant("interactive", kind="interactive", settings={"binary": str(binary)})
+    es = EvalSet(archive, "demo")
+    [first] = runner.run_set(es, [v], es.cases(), runner.Options(run_id="rs", echo=lambda m: None))
+    (tmp_path / "prompt-received.txt").unlink()
+    pause = es.runs_dir / "rs" / "PAUSE"
+    pause.write_text("")
+    slept: list[float] = []
+    opts = runner.Options(run_id="rs", repeat=2, resume=True, max_usd=10, echo=lambda m: None,
+                          sleep=lambda s: (slept.append(s), pause.unlink()))
+    results = runner.run_set(es, [v], es.cases(), opts)
+    assert results[0]["started"] == first["started"]  # kept, not run again
+    assert results[1]["repeat"] == 2 and results[1]["final_state"] == "finished"
+    assert slept == [30]  # repeat 2 waited for the PAUSE file to go
+    assert opts.spent == 0.84  # the kept run's spend counts toward --max-usd
