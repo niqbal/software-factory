@@ -105,7 +105,8 @@ const money = x => "$" + (x || 0).toFixed(2);
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
 const when = t => t ? new Date(t * 1000).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "–";
 const ago = t => { const m = Math.round((DATA.generated - t) / 60); return m < 60 ? m + " min" : (m / 60).toFixed(1) + " h"; };
-const color = v => { if (!SLOT[v]) { const extra = variantsAll().filter(x => !(x in SLOT)); SLOT[v] = SPARE[extra.indexOf(v) % SPARE.length]; } return `var(--s${SLOT[v]})`; };
+const FIXED = new Set(Object.keys(SLOT));
+const color = v => { if (!SLOT[v]) { const extra = variantsAll().filter(x => !FIXED.has(x)); SLOT[v] = SPARE[extra.indexOf(v) % SPARE.length]; } return `var(--s${SLOT[v]})`; };
 const sw = v => `<span class="sw" style="background:${color(v)}"></span>`;
 let state = {set: null, runs: null, baseline: "interactive", heatVariant: null, report: null, open: {}};
 try { Object.assign(state, JSON.parse(localStorage.getItem("evals-state") || "{}")); } catch (e) {}
