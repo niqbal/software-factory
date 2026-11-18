@@ -367,11 +367,26 @@ function renderDetail() {
   if (tab === 'report') body = D.report ? md(D.report) : '<div class="hint">No report yet (written when the job commits).</div>';
   if (tab === 'timeline') body = '<div class="tl">' + D.events.slice().reverse().map(e => `<div><span class="ty">${new Date(e.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span><span class="ty">${esc(e.type)}</span><span>${esc(e.summary)}</span></div>`).join('') + '</div>';
   if (tab === 'revise') body = `<p class="hint">Notes for the implementer, one per line. It works on top of the delivered branch and addresses only these.</p>${D.data.unresolved_review?.length ? '<p class="hint">Filled in with the findings the reviewers still block on. Edit or add to them, then send.</p>' : ''}<textarea id="reviseNotes" placeholder="e.g. Rename tokenKey to TokenKey and document it">${esc((D.data.unresolved_review || []).map(l => l.replace(/^- /, '')).join('\n'))}</textarea><div class="actions"><button class="primary" onclick="doAction('revise')">Send back</button></div>`;
-  $('detail').innerHTML = `<div class="dhead"><h3>${esc(name(D.item, D.title))}</h3>
+  const html = `<div class="dhead"><h3>${esc(name(D.item, D.title))}</h3>
     <div class="meta">${chip(D.state)}<span>${esc(D.id)}</span><span>tier ${esc(D.tier ?? '–')}</span><span>updated ${ago(D.updated)}</span></div>
     <div class="actions">${acts || '<span class="hint">Nothing to do: the factory is working on it or it is finished.</span>'}</div></div>
     <div class="tabs">${t('overview','Overview')}${t('diff','Diff')}${t('report','Report')}${t('timeline','Timeline')}${D.actions.includes('revise') ? t('revise','Revise') : ''}</div>
     <div class="body">${body}</div>`;
+  // The detail reloads every few seconds. Rebuilding it resets every scrolled box (the diff jumped
+  // back to the top), so leave it alone when nothing changed, and otherwise put the scroll back.
+  const el = $('detail'), view = D.id + ' ' + tab;
+  if (renderDetail.view === view && renderDetail.html === html) return;
+  const keep = renderDetail.view === view
+    ? [...el.querySelectorAll('*')].filter(e => e.scrollTop || e.scrollLeft).map(e => [scrollKey(e, el), e.scrollTop, e.scrollLeft]) : [];
+  el.innerHTML = html;
+  renderDetail.view = view; renderDetail.html = html;
+  for (const [k, top, left] of keep) { const e = el.querySelector(k); if (e) { e.scrollTop = top; e.scrollLeft = left; } }
+}
+// A selector for el inside root by child positions, so the rebuilt element can be found again.
+function scrollKey(el, root) {
+  const path = [];
+  for (; el !== root; el = el.parentElement) path.unshift(`:nth-child(${[...el.parentElement.children].indexOf(el) + 1})`);
+  return ':scope > ' + path.join(' > ');
 }
 
 async function queueItem(id) { await post(pa(`/backlog/${id}/queue`), {}, 'queue ' + id); }
