@@ -93,7 +93,8 @@ details summary{cursor:pointer}
 <script>
 const DATA = /*__DATA__*/null;
 const ORDER = ["interactive","claude_code","claude_code_native","cursor_cli","cursor_native"];
-const SLOT = {interactive:5, claude_code:1, claude_code_native:2, cursor_cli:3, cursor_native:4};
+const SLOT = {interactive:5, claude_code:1, claude_code_native:2, cursor_cli:3, cursor_native:4, local_gemma:7, local_qwen:6};
+const SPARE = [8, 6, 7]; // further variants take these in order; colour follows the variant, never its rank
 const LABEL = {settled:"skipped: first repeats agreed",resolved:"resolved",partial:"delivered, hidden tests fail",not_delivered:"not delivered",error:"infra error",pending:"not run yet",running:"running"};
 const GLYPH = {settled:"=",resolved:"✓",partial:"~",not_delivered:"✗",error:"!",pending:"",running:""};
 const VIEWS = [["live","Live run"],["compare","Compare"],["history","History"],["cases","Cases"],["reports","Reports"]];
@@ -104,7 +105,7 @@ const money = x => "$" + (x || 0).toFixed(2);
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
 const when = t => t ? new Date(t * 1000).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "–";
 const ago = t => { const m = Math.round((DATA.generated - t) / 60); return m < 60 ? m + " min" : (m / 60).toFixed(1) + " h"; };
-const color = v => `var(--s${SLOT[v] || ((Object.keys(SLOT).length + variantsAll().indexOf(v)) % 8) + 1})`;
+const color = v => { if (!SLOT[v]) { const extra = variantsAll().filter(x => !(x in SLOT)); SLOT[v] = SPARE[extra.indexOf(v) % SPARE.length]; } return `var(--s${SLOT[v]})`; };
 const sw = v => `<span class="sw" style="background:${color(v)}"></span>`;
 let state = {set: null, runs: null, baseline: "interactive", heatVariant: null, report: null, open: {}};
 try { Object.assign(state, JSON.parse(localStorage.getItem("evals-state") || "{}")); } catch (e) {}
