@@ -81,6 +81,7 @@ class ClaudeCodeConversation(Conversation):
         specs = "\n".join(f"- {t.name}: {t.description}\n  schema: {json.dumps(t.schema)}" for t in tools)
         self.system = system + PROTOCOL + specs
         self.session: str | None = None
+        self.session_cost = 0.0  # the running total the CLI last reported for this session
         self.pending: list[str] = []
         self.n = 0
         # Claude Code keys sessions by working directory: keep one quiet dir per conversation.
@@ -102,7 +103,10 @@ class ClaudeCodeConversation(Conversation):
             d = self.p.call(prompt, self.system, self.model, self.effort, TURN_SCHEMA,
                             resume=self.session, cwd=self.cwd)
             self.session = d.get("session_id") or self.session
-            cost += float(d.get("total_cost_usd") or 0)
+            # With --resume, total_cost_usd is the session's running total, not this call's cost.
+            total = float(d.get("total_cost_usd") or 0)
+            cost += max(0.0, total - self.session_cost)
+            self.session_cost = max(self.session_cost, total)
             for k, v in _usage(d).items():
                 usage[k] += v
             out = d.get("structured_output")
