@@ -131,6 +131,16 @@ class Case:
         return d
 
 
+def map_path(path: str) -> str:
+    """Rewrite a case's local path for another machine: ASF_EVAL_PATH_MAP="/from=/to[;/from2=/to2]",
+    e.g. "/Users/me/work=/Users/other/work", so one archive serves several machines."""
+    for pair in filter(None, os.environ.get("ASF_EVAL_PATH_MAP", "").split(";")):
+        src, _, dst = pair.partition("=")
+        if src and dst and (path == src or path.startswith(src.rstrip("/") + "/")):
+            return dst.rstrip("/") + path[len(src.rstrip("/")):]
+    return path
+
+
 def parse_case(data: dict[str, Any], path: Path | None = None) -> Case:
     if not isinstance(data, dict):
         raise EvalError(f"{path}: a case must be a mapping")
@@ -152,13 +162,13 @@ def parse_case(data: dict[str, Any], path: Path | None = None) -> Case:
     case_id = str(data.get("id") or (path.stem if path else ""))
     if not case_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", case_id):
         raise EvalError(f"{path or 'case'}: id must be letters, digits, '.', '_' or '-' (got {case_id!r})")
-    return Case(id=case_id, repo=str(data["repo"]), base=str(data["base"]), reference=str(data.get("reference") or ""),
+    return Case(id=case_id, repo=map_path(str(data["repo"])), base=str(data["base"]), reference=str(data.get("reference") or ""),
                 ticket=Ticket(title=str(t["title"]), body=str(t.get("body") or ""),
                               acceptance=[str(a) for a in t.get("acceptance") or []], kind=kind),
                 hidden_tests=[str(h) for h in data.get("hidden_tests") or []],
                 test_command=str(data.get("test_command") or ""),
                 setup=[str(s) for s in data.get("setup") or []],
-                deps_from=str(data.get("deps_from") or ""), config=data.get("config"),
+                deps_from=map_path(str(data.get("deps_from") or "")), config=data.get("config"),
                 notes=str(data.get("notes") or ""), hidden_dir=str(data.get("hidden_dir") or ""),
                 reference_patch=str(data.get("reference_patch") or ""),
                 tags=[str(t) for t in data.get("tags") or []], reference_by=str(data.get("reference_by") or ""),
