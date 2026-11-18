@@ -119,12 +119,15 @@ def run_set(evalset: EvalSet, variants: list[Variant], cases: list[Case], opts: 
         opts.spent += sum(float(r.get("cost_usd") or 0) for r in _finished(run_dir))
     meta = {"run_id": opts.run_id, "set": evalset.name, "started": time.time(), "asf": code_version(),
             "variants": {v.name: {"kind": v.kind, "hash": v.hash, "source": v.source} for v in runnable},
-            "cases": [c.id for c in cases], "repeat": opts.repeat, "jobs": opts.jobs, "max_usd": opts.max_usd}
+            "cases": [c.id for c in cases], "repeat": opts.repeat, "jobs": opts.jobs, "max_usd": opts.max_usd,
+            # What each variant is meant to run, so progress can be shown against it.
+            "plan": {v.name: {"cases": [c.id for c in cases], "repeat": opts.repeat} for v in runnable}}
     meta_path = run_dir / "run.json"
     if opts.resume and meta_path.exists():
         prev = json.loads(meta_path.read_text())
         meta["started"] = prev.get("started", meta["started"])
         meta["variants"] = {**prev.get("variants", {}), **meta["variants"]}
+        meta["plan"] = {**prev.get("plan", {}), **meta["plan"]}
         meta["cases"] = sorted(set(prev.get("cases", [])) | set(meta["cases"]))
         meta["repeat"] = max(int(prev.get("repeat") or 1), opts.repeat)
     meta_path.write_text(json.dumps(meta, indent=1))

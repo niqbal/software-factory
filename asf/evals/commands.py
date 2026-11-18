@@ -71,6 +71,10 @@ def add_parser(sub: Any) -> None:
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-write", action="store_true", help="print only")
 
+    st = es.add_parser("site", parents=[common], help="build one HTML page over every run: live progress, comparisons, history, reports")
+    st.add_argument("--out", help="folder for index.html (default: <archive>/site)")
+    st.add_argument("--watch", type=int, metavar="SECONDS", help="rebuild every SECONDS until stopped")
+
     ls = es.add_parser("list", parents=[common], help="sets, cases and variants")
     ls.add_argument("--set", dest="set_name")
 
@@ -78,7 +82,7 @@ def add_parser(sub: Any) -> None:
 def handle(args: argparse.Namespace) -> int:
     root = evals_root(args.evals)
     try:
-        return {"import": _import, "mine": _mine, "check": _check, "run": _run, "report": _report, "list": _list}[args.eval_cmd](args, root)
+        return {"import": _import, "mine": _mine, "check": _check, "run": _run, "report": _report, "list": _list, "site": _site}[args.eval_cmd](args, root)
     except EvalError as e:
         print(f"eval: {e}", file=sys.stderr)
         return 2
@@ -193,6 +197,19 @@ def _report(args: argparse.Namespace, root: Path) -> int:
         js, md = report_mod.write(es, rep)
         print(f"wrote {js} and {md}", file=sys.stderr)
     return 0
+
+
+def _site(args: argparse.Namespace, root: Path) -> int:
+    import time
+
+    from . import site
+    out = Path(args.out).expanduser() if args.out else root / "site"
+    while True:
+        target = site.build(root, out)
+        if not args.watch:
+            print(target)
+            return 0
+        time.sleep(args.watch)
 
 
 def _list(args: argparse.Namespace, root: Path) -> int:

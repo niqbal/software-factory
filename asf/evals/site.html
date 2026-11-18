@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Evals</title>
+<style>
+:root{
+  --bg:#fcfcfb;--panel:#ffffff;--fg:#0b0b0b;--fg2:#52514e;--muted:#7d7c77;--line:#e6e4dd;--head:#f4f3ef;
+  --s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;
+  --good:#0ca30c;--warn:#fab219;--crit:#d03b3b;--na:#b9b7b0;--seq0:#eef4fc;--seq1:#2a78d6;--accent:#2a78d6;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#1a1a19;--panel:#222220;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--line:#383835;--head:#262624;
+  --s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#0ca30c;--s7:#9085e9;--s8:#e66767;
+  --na:#5a5954;--seq0:#24303f;--seq1:#3987e5;--accent:#3987e5}}
+:root[data-theme="dark"]{
+  --bg:#1a1a19;--panel:#222220;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--line:#383835;--head:#262624;
+  --s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#0ca30c;--s7:#9085e9;--s8:#e66767;
+  --na:#5a5954;--seq0:#24303f;--seq1:#3987e5;--accent:#3987e5}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1280px;margin:0 auto;padding:10px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.brand{font-weight:650;font-size:16px}
+nav{display:flex;gap:2px;flex-wrap:wrap}
+nav a{padding:6px 11px;border-radius:6px;color:var(--fg2);text-decoration:none}
+nav a.on{background:var(--head);color:var(--fg);font-weight:600}
+.meta{margin-left:auto;color:var(--muted);font-size:12px}
+main{max-width:1280px;margin:0 auto;padding:18px 16px 60px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 10px}
+.sub{color:var(--fg2);margin:0 0 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+.tile .name{display:flex;align-items:center;gap:7px;font-weight:600}
+.sw{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
+.big{font-size:26px;font-weight:650;margin:6px 0 0}
+.small{font-size:12px;color:var(--muted)}
+.prog{height:8px;background:var(--head);border-radius:4px;overflow:hidden;display:flex;gap:2px;margin:8px 0 6px}
+.prog i{display:block;height:100%}
+.counts{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--fg2)}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+table{border-collapse:collapse;width:100%}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+thead th{background:var(--head);font-size:12px;color:var(--fg2);font-weight:600;position:sticky;top:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+td.wrapcell{white-space:normal;min-width:220px}
+tr:last-child td{border-bottom:none}
+.dots{display:flex;gap:4px;align-items:center}
+.dot{width:16px;height:16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;cursor:default}
+.o-resolved{background:var(--good)}.o-partial{background:var(--warn);color:#3a2a00}.o-not_delivered{background:var(--crit)}
+.o-error{background:var(--na);color:var(--fg)}.o-pending{background:transparent;border:1.5px dashed var(--na)}
+.o-running{background:transparent;border:2px solid var(--accent);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--fg2);margin:8px 0}
+.legend span{display:inline-flex;gap:6px;align-items:center}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;border:1px solid var(--line);color:var(--fg2)}
+.pill.warn{border-color:var(--warn)}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+.chip{padding:4px 10px;border:1px solid var(--line);border-radius:14px;cursor:pointer;background:var(--panel);color:var(--fg2);font-size:12px}
+.chip.on{border-color:var(--accent);color:var(--fg);background:var(--head);font-weight:600}
+select{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit}
+.tip{position:fixed;pointer-events:none;background:var(--fg);color:var(--bg);padding:7px 9px;border-radius:6px;font-size:12px;max-width:380px;z-index:20;display:none;white-space:normal;line-height:1.4}
+svg text{fill:var(--fg2);font-size:11px}
+.axis line,.axis path{stroke:var(--line)}
+.split{display:grid;grid-template-columns:220px 1fr;gap:16px}
+.split ul{list-style:none;margin:0;padding:0}
+.split li a{display:block;padding:6px 8px;border-radius:6px;color:var(--fg2);text-decoration:none;font-size:13px}
+.split li a.on{background:var(--head);color:var(--fg);font-weight:600}
+.md table{width:auto}.md td,.md th{white-space:normal}.md pre{background:var(--head);padding:10px;border-radius:6px;overflow-x:auto}
+.md code{background:var(--head);padding:1px 4px;border-radius:4px;font-size:12.5px}
+details summary{cursor:pointer}
+.pos{color:var(--good)}.neg{color:var(--crit)}
+.empty{color:var(--muted);padding:20px;text-align:center}
+@media (max-width:720px){.split{grid-template-columns:1fr}.meta{margin-left:0}}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <span class="brand">Factory evals</span>
+  <nav id="nav"></nav>
+  <span class="meta" id="meta"></span>
+</div></header>
+<main id="main"></main>
+<div class="tip" id="tip"></div>
+<script>
+const DATA = /*__DATA__*/null;
+const ORDER = ["interactive","claude_code","claude_code_native","cursor_cli","cursor_native"];
+const SLOT = {interactive:5, claude_code:1, claude_code_native:2, cursor_cli:3, cursor_native:4};
+const LABEL = {resolved:"resolved",partial:"delivered, hidden tests fail",not_delivered:"not delivered",error:"infra error",pending:"not run yet",running:"running"};
+const GLYPH = {resolved:"✓",partial:"~",not_delivered:"✗",error:"!",pending:"",running:""};
+const VIEWS = [["live","Live run"],["compare","Compare"],["history","History"],["cases","Cases"],["reports","Reports"]];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = x => x == null || isNaN(x) ? "–" : Math.round(x * 100) + "%";
+const money = x => "$" + (x || 0).toFixed(2);
+const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+const when = t => t ? new Date(t * 1000).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "–";
+const ago = t => { const m = Math.round((DATA.generated - t) / 60); return m < 60 ? m + " min" : (m / 60).toFixed(1) + " h"; };
+const color = v => `var(--s${SLOT[v] || ((Object.keys(SLOT).length + variantsAll().indexOf(v)) % 8) + 1})`;
+const sw = v => `<span class="sw" style="background:${color(v)}"></span>`;
+let state = {set: null, runs: null, baseline: "interactive", heatVariant: null, report: null, open: {}};
+try { Object.assign(state, JSON.parse(localStorage.getItem("evals-state") || "{}")); } catch (e) {}
+const save = () => { try { localStorage.setItem("evals-state", JSON.stringify(state)); } catch (e) {} };
+
+function sets() { return DATA.sets.map(s => s.name); }
+function curSet() { if (!sets().includes(state.set)) state.set = latestRun()?.set || sets()[0]; return state.set; }
+function runsOf(set) { return DATA.runs.filter(r => r.set === set).sort((a, b) => (a.started || 0) - (b.started || 0)); }
+function samplesOf(set, runs) { return DATA.samples.filter(s => s.set === set && (!runs || runs.includes(s.run))); }
+function variantsAll() { const seen = new Set(DATA.samples.map(s => s.variant)); DATA.runs.forEach(r => Object.keys(r.plan || {}).forEach(v => seen.add(v))); return [...ORDER.filter(v => seen.has(v)), ...[...seen].filter(v => !ORDER.includes(v)).sort()]; }
+function variantsIn(samples) { const seen = new Set(samples.map(s => s.variant)); return variantsAll().filter(v => seen.has(v)); }
+function latestRun() {
+  const act = r => Math.max(r.started || 0, ...r.active.map(a => a.updated), ...DATA.samples.filter(s => s.set === r.set && s.run === r.run).map(s => s.finished || 0));
+  return [...DATA.runs].sort((a, b) => act(b) - act(a))[0];
+}
+function caseTitle(set, id) { return DATA.sets.find(s => s.name === set)?.cases[id]?.title || ""; }
+function scored(ss) { return ss.filter(s => s.outcome !== "error"); }
+function stats(ss) {
+  const sc = scored(ss), res = sc.filter(s => s.resolved != null);
+  const resolved = res.filter(s => s.resolved === 1).length;
+  const cost = sc.reduce((a, s) => a + s.cost_usd, 0);
+  return {n: sc.length, errors: ss.length - sc.length, resolved, rate: res.length ? resolved / res.length : null,
+    hidden: mean(sc.filter(s => s.hidden_rate != null).map(s => s.hidden_rate)), visible: mean(sc.map(s => s.visible)),
+    gap: mean(sc.filter(s => s.gap != null).map(s => s.gap)), first: mean(sc.filter(s => s.first_try != null).map(s => s.first_try)),
+    cost, est: sc.some(s => s.cost_estimated), perResolved: resolved ? cost / resolved : null, minutes: mean(sc.map(s => s.minutes)),
+    ci: wilson(resolved, res.length)};
+}
+function wilson(k, n) { if (!n) return null; const z = 1.96, p = k / n, d = 1 + z * z / n, c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d; return [Math.max(0, c - h), Math.min(1, c + h)]; }
+function dotHtml(o, s, extra) {
+  const tip = s ? `${s.variant} · ${s.case} · r${s.repeat}<br><b>${LABEL[o]}</b>${s.fail_to_pass != null ? ` · fixed ${s.fixed}/${s.fail_to_pass} target tests` : ""}${s.broken ? ` · broke ${s.broken}` : ""}<br>${s.final_state}${s.stop_reason ? " — " + esc(s.stop_reason) : ""}<br>${money(s.cost_usd)}${s.cost_estimated ? " (est.)" : ""} · ${s.minutes.toFixed(1)} min · run ${s.run}` : extra || LABEL[o];
+  return `<span class="dot o-${o}" data-tip="${esc(tip)}" aria-label="${LABEL[o]}">${GLYPH[o]}</span>`;
+}
+const legendHtml = () => `<div class="legend">${["resolved","partial","not_delivered","error","running","pending"].map(o => `<span>${dotHtml(o, null)} ${LABEL[o]}</span>`).join("")}</div>`;
+
+/* ---------- Live ---------- */
+function viewLive() {
+  const run = latestRun();
+  if (!run) return `<p class="empty">No runs in the archive yet.</p>`;
+  const ss = samplesOf(run.set, [run.run]);
+  const variants = variantsAll().filter(v => run.plan[v] || ss.some(s => s.variant === v));
+  const done = run.active.length === 0 && variants.every(v => ss.filter(s => s.variant === v).length >= planned(run, v));
+  const spent = ss.filter(s => !s.cost_estimated).reduce((a, s) => a + s.cost_usd, 0);
+  let h = `<h1>${esc(run.run)} <span class="pill">${esc(run.set)}</span> ${done ? '<span class="pill">finished</span>' : run.active.length ? '<span class="pill">running</span>' : '<span class="pill">idle</span>'}
+    ${run.paused.map(p => `<span class="pill warn">${esc(p)}: new ${p === "PAUSE" ? "" : p.slice(6) + " "}runs held</span>`).join(" ")}</h1>
+    <p class="sub">Started ${when(run.started)} · factory code ${esc((run.asf || "").slice(0, 9))} · Claude spend ${money(spent)}${run.max_usd ? " of " + money(run.max_usd) + " cap" : ""}${run.infra_retried ? ` · ${run.infra_retried} infra failure(s) set aside and rerun` : ""}</p>`;
+  h += `<div class="grid">` + variants.map(v => {
+    const vs = ss.filter(s => s.variant === v), st = stats(vs), plan = planned(run, v), act = run.active.filter(a => a.variant === v).length;
+    const by = o => vs.filter(s => s.outcome === o).length, w = n => plan ? (100 * n / plan) + "%" : "0";
+    return `<div class="card tile"><div class="name">${sw(v)}${esc(v)}</div>
+      <div class="big">${pct(st.rate)} <span class="small">resolved</span></div>
+      <div class="prog" title="${vs.length} of ${plan} done">
+        <i style="width:${w(by("resolved"))};background:var(--good)"></i><i style="width:${w(by("partial"))};background:var(--warn)"></i>
+        <i style="width:${w(by("not_delivered"))};background:var(--crit)"></i><i style="width:${w(by("error"))};background:var(--na)"></i>
+        <i style="width:${w(act)};background:var(--accent);opacity:.45"></i></div>
+      <div class="counts"><span>${vs.length}/${plan} done</span><span>✓ ${by("resolved")}</span><span>~ ${by("partial")}</span><span>✗ ${by("not_delivered")}</span>${by("error") ? `<span>! ${by("error")}</span>` : ""}${act ? `<span>▶ ${act} running</span>` : ""}</div>
+      <div class="small" style="margin-top:6px">hidden ${pct(st.hidden)} · visible ${pct(st.visible)} · ${st.minutes ? st.minutes.toFixed(1) : "–"} min · ${st.est ? "est. " : ""}${money(st.cost)}</div></div>`;
+  }).join("") + `</div>`;
+  if (run.active.length) {
+    h += `<h2>Running now</h2><div class="wrap"><table><thead><tr><th>variant</th><th>case</th><th>repeat</th><th>step</th><th class="num">running for</th><th class="num">last activity</th></tr></thead><tbody>` +
+      run.active.map(a => `<tr><td>${sw(a.variant)} ${esc(a.variant)}</td><td>${esc(a.case)}</td><td>r${a.repeat}</td><td>${esc(a.step || "starting")}</td><td class="num">${ago(a.since)}</td><td class="num">${ago(a.updated)} ago</td></tr>`).join("") + `</tbody></table></div>`;
+  }
+  const cases = [...new Set([...Object.values(run.plan).flatMap(p => p.cases || []), ...ss.map(s => s.case)])].sort();
+  h += `<h2>Every case × variant</h2>${legendHtml()}<div class="wrap"><table><thead><tr><th>case</th>${variants.map(v => `<th>${sw(v)} ${esc(v)}</th>`).join("")}</tr></thead><tbody>` +
+    cases.map(c => `<tr><td title="${esc(caseTitle(run.set, c))}">${esc(c)}</td>${variants.map(v => {
+      const n = Math.max(run.plan[v]?.cases?.includes(c) ? run.plan[v].repeat : 0, ...ss.filter(s => s.case === c && s.variant === v).map(s => s.repeat));
+      let cells = "";
+      for (let k = 1; k <= n; k++) {
+        const s = ss.find(s => s.case === c && s.variant === v && s.repeat === k);
+        const a = run.active.find(a => a.case === c && a.variant === v && a.repeat === k);
+        cells += s ? dotHtml(s.outcome, s) : a ? dotHtml("running", null, `${v} · r${k}: ${a.step || "starting"}, ${ago(a.since)}`) : dotHtml("pending", null, `${v} · r${k}: not run yet`);
+      }
+      return `<td><div class="dots">${cells || '<span class="small">–</span>'}</div></td>`;
+    }).join("")}</tr>`).join("") + `</tbody></table></div>`;
+  return h;
+}
+function planned(run, v) { const p = run.plan[v]; return p ? (p.cases || []).length * (p.repeat || 1) : 0; }
+
+/* ---------- Compare ---------- */
+function viewCompare() {
+  const set = curSet(), runs = runsOf(set).map(r => r.run);
+  if (!state.runs || !state.runs.some(r => runs.includes(r))) state.runs = runs.slice(-1);
+  const sel = state.runs.filter(r => runs.includes(r)), ss = samplesOf(set, sel), variants = variantsIn(ss);
+  let h = `<h1>Compare variants</h1><p class="sub">Pick the runs to pool. Resolved = delivered and every hidden test passes. Bars show the 95% interval; with few cases, overlapping intervals mean the difference may be noise.</p>
+    <div class="controls">${setPicker()}<span class="small">runs:</span>${runs.map(r => `<span class="chip ${sel.includes(r) ? "on" : ""}" data-run="${esc(r)}">${esc(r)}</span>`).join("")}</div>`;
+  if (!ss.length) return h + `<p class="empty">No finished runs selected.</p>`;
+  const st = Object.fromEntries(variants.map(v => [v, stats(ss.filter(s => s.variant === v))]));
+  h += `<div class="card">${barChart(variants.map(v => ({v, ...st[v]})))}</div>`;
+  h += `<h2>All measures</h2><div class="wrap"><table><thead><tr><th>variant</th><th class="num">runs</th><th class="num">resolved</th><th class="num">hidden pass</th><th class="num">visible pass</th><th class="num">gap</th><th class="num">gates 1st try</th><th class="num">cost / run</th><th class="num">cost / resolved</th><th class="num">min / run</th><th class="num">infra errors</th></tr></thead><tbody>` +
+    variants.map(v => { const s = st[v]; return `<tr><td>${sw(v)} ${esc(v)}</td><td class="num">${s.n}</td><td class="num">${pct(s.rate)} <span class="small">${s.resolved}/${s.n}</span></td><td class="num">${pct(s.hidden)}</td><td class="num">${pct(s.visible)}</td><td class="num">${pct(s.gap)}</td><td class="num">${pct(s.first)}</td><td class="num">${s.est ? "est. " : ""}${s.n ? money(s.cost / s.n) : "–"}</td><td class="num">${s.perResolved != null ? (s.est ? "est. " : "") + money(s.perResolved) : "–"}</td><td class="num">${s.minutes ? s.minutes.toFixed(1) : "–"}</td><td class="num">${s.errors || ""}</td></tr>`; }).join("") +
+    `</tbody></table></div><p class="small">Gap = visible pass (the factory's own gates) but hidden tests fail: work that looks done and is not. Cursor costs are token estimates.</p>`;
+  if (!variants.includes(state.baseline)) state.baseline = variants[0];
+  const b = state.baseline;
+  h += `<h2>Paired by case against <select id="baseline">${variants.map(v => `<option ${v === b ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></h2>
+    <p class="sub">Each case's resolved rate minus the baseline's on the same case; only cases both ran.</p><div class="wrap"><table><thead><tr><th>variant</th><th class="num">cases</th><th class="num">mean difference</th><th class="num">better</th><th class="num">same</th><th class="num">worse</th></tr></thead><tbody>` +
+    variants.filter(v => v !== b).map(v => { const p = paired(ss, v, b); return `<tr><td>${sw(v)} ${esc(v)}</td><td class="num">${p.n}</td><td class="num ${p.d > 0 ? "pos" : p.d < 0 ? "neg" : ""}">${p.n ? (p.d > 0 ? "+" : "") + Math.round(p.d * 100) + " pts" : "–"}</td><td class="num">${p.w}</td><td class="num">${p.t}</td><td class="num">${p.l}</td></tr>`; }).join("") + `</tbody></table></div>`;
+  const tags = [...new Set(DATA.sets.find(s => s.name === set).cases ? Object.values(DATA.sets.find(s => s.name === set).cases).flatMap(c => c.tags) : [])].sort();
+  h += `<h2>By tag (resolved)</h2><div class="wrap"><table><thead><tr><th>tag</th><th class="num">cases</th>${variants.map(v => `<th class="num">${sw(v)} ${esc(v)}</th>`).join("")}</tr></thead><tbody>` +
+    tags.map(t => { const cs = Object.entries(DATA.sets.find(s => s.name === set).cases).filter(([, c]) => c.tags.includes(t)).map(([id]) => id), tss = ss.filter(s => cs.includes(s.case));
+      return tss.length ? `<tr><td>${esc(t)}</td><td class="num">${new Set(tss.map(s => s.case)).size}</td>${variants.map(v => `<td class="num">${pct(stats(tss.filter(s => s.variant === v)).rate)}</td>`).join("")}</tr>` : ""; }).join("") + `</tbody></table></div>`;
+  return h;
+}
+function paired(ss, v, b) {
+  const rate = (vv, c) => mean(scored(ss).filter(s => s.variant === vv && s.case === c && s.resolved != null).map(s => s.resolved));
+  const cases = [...new Set(ss.map(s => s.case))].filter(c => rate(v, c) != null && rate(b, c) != null);
+  const d = cases.map(c => rate(v, c) - rate(b, c));
+  return {n: cases.length, d: mean(d), w: d.filter(x => x > 1e-9).length, t: d.filter(x => Math.abs(x) <= 1e-9).length, l: d.filter(x => x < -1e-9).length};
+}
+function barChart(rows) {
+  const W = 760, rowH = 34, L = 170, R = 60, H = rows.length * rowH + 28, x = p => L + p * (W - L - R);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Resolved rate by variant">`;
+  [0, .25, .5, .75, 1].forEach(t => s += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H - 20}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 6}" text-anchor="middle">${t * 100}%</text>`);
+  rows.forEach((r, i) => {
+    const y = i * rowH + 8, w = (r.rate || 0) * (W - L - R);
+    s += `<text x="${L - 10}" y="${y + 13}" text-anchor="end" style="fill:var(--fg)">${esc(r.v)}</text>`;
+    s += `<rect x="${L}" y="${y}" width="${Math.max(w, 2)}" height="18" rx="4" fill="${color(r.v)}" data-tip="${esc(r.v)}: ${pct(r.rate)} resolved (${r.resolved}/${r.n})${r.ci ? `<br>95% interval ${pct(r.ci[0])}–${pct(r.ci[1])}` : ""}"/>`;
+    if (r.ci) s += `<line x1="${x(r.ci[0])}" x2="${x(r.ci[1])}" y1="${y + 9}" y2="${y + 9}" stroke="var(--fg2)" stroke-width="1.5"/><line x1="${x(r.ci[0])}" x2="${x(r.ci[0])}" y1="${y + 4}" y2="${y + 14}" stroke="var(--fg2)"/><line x1="${x(r.ci[1])}" x2="${x(r.ci[1])}" y1="${y + 4}" y2="${y + 14}" stroke="var(--fg2)"/>`;
+    s += `<text x="${W - R + 8}" y="${y + 13}" style="fill:var(--fg)">${pct(r.rate)}</text>`;
+  });
+  return s + `</svg>`;
+}
+
+/* ---------- History ---------- */
+function viewHistory() {
+  const set = curSet(), runs = runsOf(set).filter(r => r.samples), variants = variantsIn(samplesOf(set));
+  let h = `<h1>History</h1><p class="sub">Each eval run in time order. A change in a variant's settings (its hash) or in the factory code is marked, so a move in the line can be traced to what changed.</p><div class="controls">${setPicker()}</div>`;
+  if (!runs.length) return h + `<p class="empty">No finished runs yet.</p>`;
+  const series = variants.map(v => ({v, pts: runs.map((r, i) => ({i, r, st: stats(samplesOf(set, [r.run]).filter(s => s.variant === v))})).filter(p => p.st.n)}));
+  h += `<div class="card">${lineChart(runs, series)}<div class="legend">${variants.map(v => `<span>${sw(v)} ${esc(v)}</span>`).join("")}</div></div>`;
+  h += `<h2>Runs</h2><div class="wrap"><table><thead><tr><th>run</th><th>started</th><th>factory code</th><th class="num">samples</th>${variants.map(v => `<th class="num">${sw(v)} ${esc(v)}</th>`).join("")}</tr></thead><tbody>` +
+    runs.map((r, i) => { const prev = runs[i - 1]; return `<tr><td>${esc(r.run)}</td><td>${when(r.started)}</td><td><code>${esc((r.asf || "").slice(0, 9))}</code>${prev && prev.asf !== r.asf ? ' <span class="pill">changed</span>' : ""}</td><td class="num">${r.samples}</td>${variants.map(v => {
+      const st = stats(samplesOf(set, [r.run]).filter(s => s.variant === v)), changed = prev && prev.variants[v] && r.variants[v] && prev.variants[v] !== r.variants[v];
+      return `<td class="num">${st.n ? pct(st.rate) + ` <span class="small">${st.resolved}/${st.n}</span>` : "–"}${changed ? ` <span class="pill" title="variant settings changed: ${esc(prev.variants[v])} → ${esc(r.variants[v])}">Δ</span>` : ""}</td>`; }).join("")}</tr>`; }).join("") + `</tbody></table></div>`;
+  if (!variants.includes(state.heatVariant)) state.heatVariant = variants.find(v => v !== "interactive") || variants[0];
+  const hv = state.heatVariant, cases = [...new Set(samplesOf(set).map(s => s.case))].sort();
+  h += `<h2>Per case over time for <select id="heatv">${variants.map(v => `<option ${v === hv ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></h2>
+    <p class="sub">Cell = resolved runs / runs of that case in that eval run; darker is better.</p><div class="wrap"><table><thead><tr><th>case</th>${runs.map(r => `<th class="num">${esc(r.run)}</th>`).join("")}</tr></thead><tbody>` +
+    cases.map(c => `<tr><td title="${esc(caseTitle(set, c))}">${esc(c)}</td>${runs.map(r => {
+      const sc = scored(samplesOf(set, [r.run]).filter(s => s.variant === hv && s.case === c));
+      if (!sc.length) return `<td class="num small">–</td>`;
+      const k = sc.filter(s => s.resolved === 1).length, f = k / sc.length;
+      return `<td class="num" style="background:color-mix(in srgb, var(--seq1) ${Math.round(12 + f * 70)}%, var(--seq0));color:${f > .55 ? "#fff" : "var(--fg)"}" data-tip="${esc(c)}<br>${esc(r.run)}: ${k}/${sc.length} resolved">${k}/${sc.length}</td>`; }).join("")}</tr>`).join("") + `</tbody></table></div>`;
+  return h;
+}
+function lineChart(runs, series) {
+  const W = 760, H = 260, L = 90, R = 60, T = 14, B = 44, n = runs.length;
+  const x = i => n === 1 ? (L + W - R) / 2 : L + i * (W - L - R) / (n - 1), y = p => T + (1 - p) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Resolved rate per run">`;
+  [0, .25, .5, .75, 1].forEach(t => s += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)"/><text x="${L - 40}" y="${y(t) + 4}" text-anchor="end">${t * 100}%</text>`);
+  runs.forEach((r, i) => s += `<text x="${x(i)}" y="${H - B + 18}" text-anchor="middle">${esc(r.run)}</text><text x="${x(i)}" y="${H - B + 32}" text-anchor="middle">${when(r.started)}</text>`);
+  series.forEach(({v, pts}) => {
+    if (pts.length > 1) s += `<polyline fill="none" stroke="${color(v)}" stroke-width="2" points="${pts.map(p => `${x(p.i)},${y(p.st.rate || 0)}`).join(" ")}"/>`;
+    pts.forEach(p => s += `<circle cx="${x(p.i)}" cy="${y(p.st.rate || 0)}" r="5" fill="${color(v)}" stroke="var(--panel)" stroke-width="2" data-tip="${esc(v)} · ${esc(p.r.run)}<br>${pct(p.st.rate)} resolved (${p.st.resolved}/${p.st.n}) · hidden ${pct(p.st.hidden)}"/>`);
+  });
+  return s + `</svg>`;
+}
+
+/* ---------- Cases ---------- */
+function viewCases() {
+  const set = curSet(), info = DATA.sets.find(s => s.name === set)?.cases || {}, ss = samplesOf(set), variants = variantsIn(ss);
+  const ids = [...new Set([...Object.keys(info), ...ss.map(s => s.case)])].sort();
+  let h = `<h1>Cases</h1><p class="sub">Every case in the set with its resolved rate per variant over all runs. Open a case for each run's outcome.</p><div class="controls">${setPicker()}</div>
+    <div class="wrap"><table><thead><tr><th>case</th><th>reference by</th><th class="num">runs</th>${variants.map(v => `<th class="num">${sw(v)} ${esc(v)}</th>`).join("")}</tr></thead><tbody>`;
+  ids.forEach(id => {
+    const cs = ss.filter(s => s.case === id), c = info[id] || {};
+    h += `<tr data-case="${esc(id)}" style="cursor:pointer"><td class="wrapcell"><b>${state.open[id] ? "▾" : "▸"} ${esc(id)}</b><div class="small">${esc(c.title)}</div><div>${(c.tags || []).map(t => `<span class="pill">${esc(t)}</span>`).join(" ")}</div></td><td>${esc(c.reference_by)}</td><td class="num">${cs.length}</td>${variants.map(v => { const st = stats(cs.filter(s => s.variant === v)); return `<td class="num">${st.n ? pct(st.rate) + ` <span class="small">${st.resolved}/${st.n}</span>` : "–"}</td>`; }).join("")}</tr>`;
+    if (state.open[id]) h += `<tr><td colspan="${3 + variants.length}" style="background:var(--head)"><table><thead><tr><th>run</th><th>variant</th><th>r</th><th>outcome</th><th class="num">target tests</th><th class="num">broke</th><th>final state</th><th class="num">cost</th><th class="num">min</th><th>why it stopped</th></tr></thead><tbody>` +
+      cs.sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => `<tr><td>${esc(s.run)}</td><td>${sw(s.variant)} ${esc(s.variant)}</td><td>${s.repeat}</td><td>${dotHtml(s.outcome, s)} ${LABEL[s.outcome]}</td><td class="num">${s.fail_to_pass != null ? `${s.fixed}/${s.fail_to_pass}` : "–"}</td><td class="num">${s.broken || ""}</td><td>${esc(s.final_state)}</td><td class="num">${s.cost_estimated ? "est. " : ""}${money(s.cost_usd)}</td><td class="num">${s.minutes.toFixed(1)}</td><td class="wrapcell small">${esc(s.stop_reason)}</td></tr>`).join("") + `</tbody></table></td></tr>`;
+  });
+  return h + `</tbody></table></div>`;
+}
+
+/* ---------- Reports ---------- */
+function viewReports() {
+  const reps = DATA.reports;
+  if (!reps.length) return `<p class="empty">No written reports yet.</p>`;
+  const key = r => (r.set ? r.set + "/" : "") + r.name;
+  if (!reps.some(r => key(r) === state.report)) state.report = key([...reps].filter(r => r.set).pop() || reps[0]);
+  const cur = reps.find(r => key(r) === state.report);
+  const body = window.marked ? marked.parse(cur.md) : `<pre>${esc(cur.md)}</pre>`;
+  return `<div class="split"><ul>${reps.map(r => `<li><a href="#reports" data-report="${esc(key(r))}" class="${key(r) === state.report ? "on" : ""}">${esc(key(r))}</a></li>`).join("")}</ul><div class="card md">${body}</div></div>`;
+}
+
+function setPicker() { const ss = sets(); return ss.length > 1 ? `<select id="setpick">${ss.map(s => `<option ${s === curSet() ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>` : `<span class="pill">set ${esc(curSet())}</span>`; }
+
+/* ---------- shell ---------- */
+function render() {
+  const view = (location.hash.slice(1) || "live").split("?")[0];
+  $("#nav").innerHTML = VIEWS.map(([k, t]) => `<a href="#${k}" class="${k === view ? "on" : ""}">${t}</a>`).join("");
+  const live = DATA.runs.some(r => r.active.length);
+  $("#meta").textContent = `Data from ${when(DATA.generated)}${live ? " · refreshes every minute" : ""}`;
+  const fn = {live: viewLive, compare: viewCompare, history: viewHistory, cases: viewCases, reports: viewReports}[view] || viewLive;
+  $("#main").innerHTML = fn();
+  save();
+}
+document.addEventListener("click", e => {
+  const run = e.target.closest("[data-run]"), cs = e.target.closest("[data-case]"), rep = e.target.closest("[data-report]");
+  if (run) { const r = run.dataset.run; state.runs = state.runs.includes(r) ? state.runs.filter(x => x !== r) : [...state.runs, r]; if (!state.runs.length) state.runs = [r]; render(); }
+  if (cs) { state.open[cs.dataset.case] = !state.open[cs.dataset.case]; render(); }
+  if (rep) { e.preventDefault(); state.report = rep.dataset.report; render(); }
+});
+document.addEventListener("change", e => {
+  if (e.target.id === "baseline") state.baseline = e.target.value;
+  if (e.target.id === "heatv") state.heatVariant = e.target.value;
+  if (e.target.id === "setpick") { state.set = e.target.value; state.runs = null; }
+  render();
+});
+const tip = $("#tip");
+document.addEventListener("mouseover", e => { const t = e.target.closest("[data-tip]"); if (!t) { tip.style.display = "none"; return; } tip.innerHTML = t.dataset.tip; tip.style.display = "block"; });
+document.addEventListener("mousemove", e => { if (tip.style.display === "block") { const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); tip.style.left = x + "px"; tip.style.top = (e.clientY + 14) + "px"; } });
+window.addEventListener("hashchange", render);
+render();
+// While a run is going the builder rewrites this file; reload to pick up new results, keeping the scroll.
+if (DATA.runs.some(r => r.active.length)) {
+  try { const y = sessionStorage.getItem("evals-scroll"); if (y) scrollTo(0, +y); } catch (e) {}
+  setTimeout(() => { try { sessionStorage.setItem("evals-scroll", scrollY); } catch (e) {} location.reload(); }, 60000);
+}
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" onload="if((location.hash||'').startsWith('#reports'))render()"></script>
+</body>
+</html>
