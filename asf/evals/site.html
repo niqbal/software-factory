@@ -247,9 +247,17 @@ function lineChart(runs, series) {
   let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Resolved rate per run">`;
   [0, .25, .5, .75, 1].forEach(t => s += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)"/><text x="${L - 40}" y="${y(t) + 4}" text-anchor="end">${t * 100}%</text>`);
   runs.forEach((r, i) => s += `<text x="${x(i)}" y="${H - B + 18}" text-anchor="middle">${esc(r.run)}</text><text x="${x(i)}" y="${H - B + 32}" text-anchor="middle">${when(r.started)}</text>`);
+  // Variants with the same rate in the same run would hide each other: set them side by side.
+  const dx = {};
+  runs.forEach((r, i) => {
+    const groups = {};
+    series.forEach(({v, pts}) => { const p = pts.find(p => p.i === i); if (p) (groups[Math.round((p.st.rate || 0) * 1000)] ||= []).push(v); });
+    Object.values(groups).forEach(vs => vs.forEach((v, j) => dx[v + "|" + i] = (j - (vs.length - 1) / 2) * 11));
+  });
+  const px = (v, p) => x(p.i) + (dx[v + "|" + p.i] || 0);
   series.forEach(({v, pts}) => {
-    if (pts.length > 1) s += `<polyline fill="none" stroke="${color(v)}" stroke-width="2" points="${pts.map(p => `${x(p.i)},${y(p.st.rate || 0)}`).join(" ")}"/>`;
-    pts.forEach(p => s += `<circle cx="${x(p.i)}" cy="${y(p.st.rate || 0)}" r="5" fill="${color(v)}" stroke="var(--panel)" stroke-width="2" data-tip="${esc(v)} · ${esc(p.r.run)}<br>${pct(p.st.rate)} resolved (${p.st.resolved}/${p.st.n}) · hidden ${pct(p.st.hidden)}"/>`);
+    if (pts.length > 1) s += `<polyline fill="none" stroke="${color(v)}" stroke-width="2" points="${pts.map(p => `${px(v, p)},${y(p.st.rate || 0)}`).join(" ")}"/>`;
+    pts.forEach(p => s += `<circle cx="${px(v, p)}" cy="${y(p.st.rate || 0)}" r="5" fill="${color(v)}" stroke="var(--panel)" stroke-width="2" data-tip="${esc(v)} · ${esc(p.r.run)}<br>${pct(p.st.rate)} resolved (${p.st.resolved}/${p.st.n}) · hidden ${pct(p.st.hidden)}"/>`);
   });
   return s + `</svg>`;
 }
