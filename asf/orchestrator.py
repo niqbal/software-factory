@@ -74,7 +74,8 @@ MARKER = "<!-- asf:{kind} {job} -->"
 TRANSIENT_ERRORS = [re.compile(p, re.I) for p in (
     r"\bHTTP 5\d\d\b", r"\[unavailable\]", r"service unavailable", r"bad gateway",
     r"gateway time-?out", r"timed? ?out", r"connection (reset|refused|aborted|error)",
-    r"temporar(il)?y", r"network", r"ECONNRESET", r"EPIPE", r"broken pipe", r"internal server error",
+    r"temporar(il)?y", r"network", r"ECONNRESET", r"ETIMEDOUT", r"EPIPE",
+    r"Cannot use this model",  # cursor-agent, briefly, for a model it does list r"broken pipe", r"internal server error",
 )]
 
 
