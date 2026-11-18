@@ -65,6 +65,9 @@ class Options:
     spent: float = 0.0
     force: bool = False
     resume: bool = False
+    # Repeat k > settle is skipped when the first `settle` repeats of that case and variant in this
+    # run agree on resolved (all resolved or all not). 0 runs every repeat.
+    settle: int = 2
     checks: dict[str, dict[str, Any]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -158,6 +161,24 @@ def _finished(run_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
+def settled(variant_dir: Path, case_id: str, k: int, settle: int) -> str:
+    """Why repeat `k` need not run: the first `settle` repeats finished and agree. Empty when it must."""
+    if settle < 1 or k <= settle:
+        return ""
+    from .report import sample_values
+    outcomes = []
+    for i in range(1, settle + 1):
+        f = variant_dir / f"{case_id}-r{i}" / "result.json"
+        r = json.loads(f.read_text()) if f.exists() else {}
+        res = sample_values(r)["resolved"] if r.get("finished") and not r.get("skipped") and not r.get("error") else None
+        if res is None:
+            return ""
+        outcomes.append(res)
+    if len(set(outcomes)) != 1:
+        return ""
+    return f"settled: the first {settle} repeats were all {'resolved' if outcomes[0] else 'not resolved'}"
+
+
 def _wait_while_paused(run_dir: Path, tag: str, opts: Options, variant: Variant) -> None:
     """A file named PAUSE in the run folder holds back new runs (runs already going finish);
     PAUSE.<backend> (claude, cursor) holds back only the variants on that backend. Used to keep a
@@ -192,6 +213,11 @@ def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Option
         if prev.get("finished") and not prev.get("skipped") and not prev.get("error"):
             return prev
     _wait_while_paused(evalset.runs_dir / opts.run_id, tag, opts, variant)
+    why = settled(evalset.runs_dir / opts.run_id / variant.name, case.id, k, opts.settle)
+    if why:
+        result.update(skipped=why, settled=True, finished=time.time())
+        echo(why)
+        return _save(out_dir, result, lines)
     with opts._lock:
         over = opts.max_usd is not None and opts.spent >= opts.max_usd
     if over:

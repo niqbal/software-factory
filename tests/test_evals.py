@@ -485,3 +485,26 @@ def test_resume_keeps_finished_runs_counts_their_spend_and_honours_pause(home, a
     assert results[1]["repeat"] == 2 and results[1]["final_state"] == "finished"
     assert slept == [30]  # repeat 2 waited for the PAUSE file to go
     assert opts.spent == 0.84  # the kept run's spend counts toward --max-usd
+
+
+def test_a_repeat_is_skipped_once_the_first_ones_agree(tmp_path):
+    from asf.evals.runner import settled
+
+    def put(case, k, resolved=True, **extra):
+        d = tmp_path / f"{case}-r{k}"
+        d.mkdir()
+        r = {"finished": 1.0, "delivered": True, **extra,
+             "hidden": {"rate": 1.0 if resolved else 0.0, "all_pass": resolved}}
+        (d / "result.json").write_text(json.dumps(r))
+
+    put("same", 1), put("same", 2)
+    put("fail", 1, resolved=False), put("fail", 2, resolved=False)
+    put("mixed", 1), put("mixed", 2, resolved=False)
+    put("errored", 1), put("errored", 2, error="ETIMEDOUT")
+    put("pending", 1)
+    assert settled(tmp_path, "same", 3, 2).startswith("settled: the first 2 repeats were all resolved")
+    assert "not resolved" in settled(tmp_path, "fail", 3, 2)
+    assert settled(tmp_path, "mixed", 3, 2) == ""      # they disagree: the third run decides
+    assert settled(tmp_path, "errored", 3, 2) == ""    # an infra error is not an answer
+    assert settled(tmp_path, "pending", 3, 2) == ""    # the second is not finished yet
+    assert settled(tmp_path, "same", 2, 2) == "" and settled(tmp_path, "same", 3, 0) == ""

@@ -49,7 +49,14 @@ tr:last-child td{border-bottom:none}
 .dots{display:flex;gap:4px;align-items:center}
 .dot{width:16px;height:16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;cursor:default}
 .o-resolved{background:var(--good)}.o-partial{background:var(--warn);color:#3a2a00}.o-not_delivered{background:var(--crit)}
-.o-error{background:var(--na);color:var(--fg)}.o-pending{background:transparent;border:1.5px dashed var(--na)}
+.o-error{background:var(--na);color:var(--fg)}.o-settled{background:transparent;border:1.5px solid var(--na);color:var(--muted)}
+.diff{font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;overflow-x:auto;background:var(--head);border-radius:6px;padding:8px;max-height:520px;overflow-y:auto}
+.diff .a{background:color-mix(in srgb,var(--good) 18%,transparent)}.diff .d{background:color-mix(in srgb,var(--crit) 18%,transparent)}.diff .h{color:var(--muted)}
+.ticket{white-space:pre-wrap;background:var(--head);border-radius:6px;padding:10px;font-size:13px}
+.box{border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0;background:var(--panel)}
+.box h3{font-size:13px;margin:0 0 8px}
+.links a{margin-right:10px;font-size:12px}
+.detail{max-width:min(1220px,calc(100vw - 64px));position:sticky;left:12px;white-space:normal}.o-pending{background:transparent;border:1.5px dashed var(--na)}
 .o-running{background:transparent;border:2px solid var(--accent);animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.35}}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--fg2);margin:8px 0}
@@ -87,8 +94,8 @@ details summary{cursor:pointer}
 const DATA = /*__DATA__*/null;
 const ORDER = ["interactive","claude_code","claude_code_native","cursor_cli","cursor_native"];
 const SLOT = {interactive:5, claude_code:1, claude_code_native:2, cursor_cli:3, cursor_native:4};
-const LABEL = {resolved:"resolved",partial:"delivered, hidden tests fail",not_delivered:"not delivered",error:"infra error",pending:"not run yet",running:"running"};
-const GLYPH = {resolved:"✓",partial:"~",not_delivered:"✗",error:"!",pending:"",running:""};
+const LABEL = {settled:"skipped: first repeats agreed",resolved:"resolved",partial:"delivered, hidden tests fail",not_delivered:"not delivered",error:"infra error",pending:"not run yet",running:"running"};
+const GLYPH = {settled:"=",resolved:"✓",partial:"~",not_delivered:"✗",error:"!",pending:"",running:""};
 const VIEWS = [["live","Live run"],["compare","Compare"],["history","History"],["cases","Cases"],["reports","Reports"]];
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -114,7 +121,20 @@ function latestRun() {
   return [...DATA.runs].sort((a, b) => act(b) - act(a))[0];
 }
 function caseTitle(set, id) { return DATA.sets.find(s => s.name === set)?.cases[id]?.title || ""; }
-function scored(ss) { return ss.filter(s => s.outcome !== "error"); }
+function scored(ss) { return ss.filter(s => s.outcome !== "error" && s.outcome !== "settled"); }
+const ART = "../"; // the server's root is the eval archive; run files are linked from there
+const cache = {};
+function lazy(url, el, fn) {
+  const go = d => { const n = document.getElementById(el); if (n) n.innerHTML = fn(d); };
+  if (cache[url]) return setTimeout(() => go(cache[url]));
+  fetch(url).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(d => { cache[url] = d; go(d); })
+    .catch(e => { const n = document.getElementById(el); if (n) n.innerHTML = `<p class="small">Could not load ${esc(url)} (${esc(e)}). Open the page through its web server, not as a file.</p>`; });
+}
+function diffHtml(t) {
+  if (!t) return `<p class="small">none</p>`;
+  return `<div class="diff">${t.split("\n").map(l => `<span class="${l.startsWith("+") && !l.startsWith("+++") ? "a" : l.startsWith("-") && !l.startsWith("---") ? "d" : l.startsWith("@@") || l.startsWith("diff ") ? "h" : ""}">${esc(l)}</span>`).join("\n")}</div>`;
+}
+const fold = (title, body, open) => `<details ${open ? "open" : ""}><summary>${title}</summary>${body}</details>`;
 function stats(ss) {
   const sc = scored(ss), res = sc.filter(s => s.resolved != null);
   const resolved = res.filter(s => s.resolved === 1).length;
@@ -130,7 +150,7 @@ function dotHtml(o, s, extra) {
   const tip = s ? `${s.variant} · ${s.case} · r${s.repeat}<br><b>${LABEL[o]}</b>${s.fail_to_pass != null ? ` · fixed ${s.fixed}/${s.fail_to_pass} target tests` : ""}${s.broken ? ` · broke ${s.broken}` : ""}<br>${s.final_state}${s.stop_reason ? " — " + esc(s.stop_reason) : ""}<br>${money(s.cost_usd)}${s.cost_estimated ? " (est.)" : ""} · ${s.minutes.toFixed(1)} min · run ${s.run}` : extra || LABEL[o];
   return `<span class="dot o-${o}" data-tip="${esc(tip)}" aria-label="${LABEL[o]}">${GLYPH[o]}</span>`;
 }
-const legendHtml = () => `<div class="legend">${["resolved","partial","not_delivered","error","running","pending"].map(o => `<span>${dotHtml(o, null)} ${LABEL[o]}</span>`).join("")}</div>`;
+const legendHtml = () => `<div class="legend">${["resolved","partial","not_delivered","error","settled","running","pending"].map(o => `<span>${dotHtml(o, null)} ${LABEL[o]}</span>`).join("")}</div>`;
 
 /* ---------- Live ---------- */
 function viewLive() {
@@ -150,9 +170,9 @@ function viewLive() {
       <div class="big">${pct(st.rate)} <span class="small">resolved</span></div>
       <div class="prog" title="${vs.length} of ${plan} done">
         <i style="width:${w(by("resolved"))};background:var(--good)"></i><i style="width:${w(by("partial"))};background:var(--warn)"></i>
-        <i style="width:${w(by("not_delivered"))};background:var(--crit)"></i><i style="width:${w(by("error"))};background:var(--na)"></i>
+        <i style="width:${w(by("not_delivered"))};background:var(--crit)"></i><i style="width:${w(by("error"))};background:var(--na)"></i><i style="width:${w(by("settled"))};background:var(--line)"></i>
         <i style="width:${w(act)};background:var(--accent);opacity:.45"></i></div>
-      <div class="counts"><span>${vs.length}/${plan} done</span><span>✓ ${by("resolved")}</span><span>~ ${by("partial")}</span><span>✗ ${by("not_delivered")}</span>${by("error") ? `<span>! ${by("error")}</span>` : ""}${act ? `<span>▶ ${act} running</span>` : ""}</div>
+      <div class="counts"><span>${vs.length}/${plan} done</span><span>✓ ${by("resolved")}</span><span>~ ${by("partial")}</span><span>✗ ${by("not_delivered")}</span>${by("error") ? `<span>! ${by("error")}</span>` : ""}${by("settled") ? `<span title="repeats skipped because the first ones agreed">= ${by("settled")}</span>` : ""}${act ? `<span>▶ ${act} running</span>` : ""}</div>
       <div class="small" style="margin-top:6px">hidden ${pct(st.hidden)} · visible ${pct(st.visible)} · ${st.minutes ? st.minutes.toFixed(1) : "–"} min · ${st.est ? "est. " : ""}${money(st.cost)}</div></div>`;
   }).join("") + `</div>`;
   if (run.active.length) {
@@ -227,9 +247,14 @@ function viewHistory() {
   const series = variants.map(v => ({v, pts: runs.map((r, i) => ({i, r, st: stats(samplesOf(set, [r.run]).filter(s => s.variant === v))})).filter(p => p.st.n)}));
   h += `<div class="card">${lineChart(runs, series)}<div class="legend">${variants.map(v => `<span>${sw(v)} ${esc(v)}</span>`).join("")}</div></div>`;
   h += `<h2>Runs</h2><div class="wrap"><table><thead><tr><th>run</th><th>started</th><th>factory code</th><th class="num">samples</th>${variants.map(v => `<th class="num">${sw(v)} ${esc(v)}</th>`).join("")}</tr></thead><tbody>` +
-    runs.map((r, i) => { const prev = runs[i - 1]; return `<tr><td>${esc(r.run)}</td><td>${when(r.started)}</td><td><code>${esc((r.asf || "").slice(0, 9))}</code>${prev && prev.asf !== r.asf ? ' <span class="pill">changed</span>' : ""}</td><td class="num">${r.samples}</td>${variants.map(v => {
+    runs.map((r, i) => { const prev = runs[i - 1]; return `<tr><td>${esc(r.run)}</td><td>${when(r.started)}</td><td><code>${esc((r.asf || "").slice(0, 9))}</code>${prev && prev.asf !== r.asf ? ' <a class="pill" href="#history" onclick="document.getElementById(\'changes\').scrollIntoView();return false">changed ↓</a>' : ""}</td><td class="num">${r.samples}</td>${variants.map(v => {
       const st = stats(samplesOf(set, [r.run]).filter(s => s.variant === v)), changed = prev && prev.variants[v] && r.variants[v] && prev.variants[v] !== r.variants[v];
       return `<td class="num">${st.n ? pct(st.rate) + ` <span class="small">${st.resolved}/${st.n}</span>` : "–"}${changed ? ` <span class="pill" title="variant settings changed: ${esc(prev.variants[v])} → ${esc(r.variants[v])}">Δ</span>` : ""}</td>`; }).join("")}</tr>`; }).join("") + `</tbody></table></div>`;
+  h += `<h2>What changed between eval runs</h2><p class="sub">The factory commits between two runs' code versions, and any change to a variant's settings. Open a commit for its diff.</p><div id="changes"><p class="small">Loading…</p></div>`;
+  lazy(`changes/${encodeURIComponent(set)}.json`, "changes", d => d.changes.length ? [...d.changes].reverse().map(c => `<div class="box"><h3>${esc(c.from)} → ${esc(c.to)} <span class="small">factory code ${esc((c.from_asf || "").slice(0, 9))} → ${esc((c.to_asf || "").slice(0, 9))}</span></h3>
+    ${c.commits.length ? c.commits.map(m => fold(`<b>${esc(m.subject)}</b> <span class="small">${esc(m.date)} · ${esc(m.sha.slice(0, 9))}</span>${m.url ? ` <a href="${esc(m.url)}" target="_blank" rel="noopener">GitHub ↗</a>` : ""}`,
+      `${m.body ? `<p class="ticket">${esc(m.body)}</p>` : ""}<p class="small">${m.files.map(esc).join("<br>")}</p>${diffHtml(m.patch)}`)).join("") : c.unknown_code ? `<p class="small">The code changed, but those commits are not in this checkout.</p>` : `<p class="small">Same factory code.</p>`}
+    ${Object.entries(c.settings).map(([v, d]) => fold(`${sw(v)} <b>${esc(v)}</b> settings changed`, diffHtml(d))).join("")}</div>`).join("") : `<p class="small">Only one run so far.</p>`);
   if (!variants.includes(state.heatVariant)) state.heatVariant = variants.find(v => v !== "interactive") || variants[0];
   const hv = state.heatVariant, cases = [...new Set(samplesOf(set).map(s => s.case))].sort();
   h += `<h2>Per case over time for <select id="heatv">${variants.map(v => `<option ${v === hv ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></h2>
@@ -271,10 +296,31 @@ function viewCases() {
   ids.forEach(id => {
     const cs = ss.filter(s => s.case === id), c = info[id] || {};
     h += `<tr data-case="${esc(id)}" style="cursor:pointer"><td class="wrapcell"><b>${state.open[id] ? "▾" : "▸"} ${esc(id)}</b><div class="small">${esc(c.title)}</div><div>${(c.tags || []).map(t => `<span class="pill">${esc(t)}</span>`).join(" ")}</div></td><td>${esc(c.reference_by)}</td><td class="num">${cs.length}</td>${variants.map(v => { const st = stats(cs.filter(s => s.variant === v)); return `<td class="num">${st.n ? pct(st.rate) + ` <span class="small">${st.resolved}/${st.n}</span>` : "–"}</td>`; }).join("")}</tr>`;
-    if (state.open[id]) h += `<tr><td colspan="${3 + variants.length}" style="background:var(--head)"><table><thead><tr><th>run</th><th>variant</th><th>r</th><th>outcome</th><th class="num">target tests</th><th class="num">broke</th><th>final state</th><th class="num">cost</th><th class="num">min</th><th>why it stopped</th></tr></thead><tbody>` +
-      cs.sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => `<tr><td>${esc(s.run)}</td><td>${sw(s.variant)} ${esc(s.variant)}</td><td>${s.repeat}</td><td>${dotHtml(s.outcome, s)} ${LABEL[s.outcome]}</td><td class="num">${s.fail_to_pass != null ? `${s.fixed}/${s.fail_to_pass}` : "–"}</td><td class="num">${s.broken || ""}</td><td>${esc(s.final_state)}</td><td class="num">${s.cost_estimated ? "est. " : ""}${money(s.cost_usd)}</td><td class="num">${s.minutes.toFixed(1)}</td><td class="wrapcell small">${esc(s.stop_reason)}</td></tr>`).join("") + `</tbody></table></td></tr>`;
+    if (state.open[id]) {
+      const el = "case-" + id.replace(/[^\w-]/g, "_");
+      h += `<tr><td colspan="${3 + variants.length}" style="background:var(--head);white-space:normal"><div class="detail"><div id="${el}"><p class="small">Loading…</p></div>
+        <div class="box"><h3>Every run of this case</h3><div class="wrap"><table><thead><tr><th>run</th><th>variant</th><th>r</th><th>outcome</th><th class="num">target tests</th><th class="num">broke</th><th>final state</th><th class="num">cost</th><th class="num">min</th><th>files</th><th>why it stopped</th></tr></thead><tbody>` +
+        cs.sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => `<tr><td>${esc(s.run)}</td><td>${sw(s.variant)} ${esc(s.variant)}</td><td>${s.repeat}</td><td>${dotHtml(s.outcome, s)} ${LABEL[s.outcome]}</td><td class="num">${s.fail_to_pass != null ? `${s.fixed}/${s.fail_to_pass}` : "–"}</td><td class="num">${s.broken || ""}</td><td>${esc(s.final_state)}</td><td class="num">${s.cost_estimated ? "est. " : ""}${money(s.cost_usd)}</td><td class="num">${s.minutes.toFixed(1)}</td><td class="links">${s.files.map(f => `<a href="${ART}${esc(s.path)}/${esc(f)}" target="_blank">${esc(f.replace("candidate.diff", "agent's diff"))}</a>`).join("")}</td><td class="wrapcell small">${esc(s.stop_reason)}</td></tr>`).join("") + `</tbody></table></div></div></div></td></tr>`;
+      lazy(`cases/${encodeURIComponent(set)}/${encodeURIComponent(id)}.json`, el, caseDetail);
+    }
   });
   return h + `</tbody></table></div>`;
+}
+
+function caseDetail(d) {
+  if (d.error) return `<p class="small">Could not read this case: ${esc(d.error)}</p>`;
+  const short = x => esc((x || "").slice(0, 9));
+  return `<div class="box"><h3>What the agents were given</h3>
+      <p class="small">The ticket below, exactly as every variant received it, and the ${esc(d.repo)} repository at base commit <code>${short(d.base)}</code> including its existing tests. Nothing else about the expected fix.</p>
+      <div class="ticket">${esc(d.prompt)}</div>${d.notes ? `<p class="small">Why this case is in the set: ${esc(d.notes)}</p>` : ""}</div>
+    <div class="box"><h3>Hidden from the agents: how it is scored</h3>
+      <p class="small">After a run, these test files are put into the agent's result and run. <b>Resolved</b> = every target test passes and none of the ${d.pass_to_pass} already-passing tests break.</p>
+      <p><b>Target tests</b> (fail on base, pass on the reference):</p><ul>${d.fail_to_pass.map(t => `<li><code>${esc(t)}</code></li>`).join("")}</ul>
+      ${d.flaky.length ? `<p class="small">Dropped as flaky: ${d.flaky.map(esc).join(", ")}</p>` : ""}${d.warnings.length ? `<p class="small">Check warnings: ${d.warnings.map(esc).join("; ")}</p>` : ""}
+      ${d.hidden_files.map(f => fold(`<code>${esc(f.path)}</code> <span class="small">${esc(f.source)} · ${f.at_base ? "an older version exists at base, which the agent could see" : "new: the agent never saw any version"}</span>`,
+        (f.diff_from_base ? fold("What the hidden version adds to the file the agent saw", diffHtml(f.diff_from_base), true) : "") + fold("Full hidden file", `<div class="diff">${esc(f.text)}</div>`, !f.diff_from_base))).join("")}
+      ${d.repo_found ? "" : `<p class="small">The repository was not found on this machine, so file contents are missing.</p>`}</div>
+    <div class="box">${fold(`<b>Reference fix</b> <span class="small">the accepted change, base <code>${short(d.base)}</code> → reference <code>${short(d.reference)}</code>, hidden tests left out; by ${esc(d.reference_by || "?")}</span>`, diffHtml(d.reference_fix))}</div>`;
 }
 
 /* ---------- Reports ---------- */

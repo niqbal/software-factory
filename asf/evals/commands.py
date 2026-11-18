@@ -61,6 +61,8 @@ def add_parser(sub: Any) -> None:
     r.add_argument("--run-id", help="name for this run (default: a timestamp)")
     r.add_argument("--report", action="store_true", help="print the set's report afterwards")
     r.add_argument("--force", action="store_true", help="run cases whose check found problems")
+    r.add_argument("--settle", type=int, default=2, metavar="N",
+                   help="skip repeats after the first N once those agree on resolved (default 2; 0 runs every repeat)")
     r.add_argument("--resume", action="store_true", help="keep finished runs in --run-id and do only the rest; a PAUSE file in the run folder holds back new runs")
 
     p = es.add_parser("report", parents=[common], help="per-variant tables; writes JSON and Markdown into the archive")
@@ -170,7 +172,7 @@ def _run(args: argparse.Namespace, root: Path) -> int:
     if args.repeat < 1 or args.jobs < 1:
         raise EvalError("--repeat and --jobs must be at least 1")
     opts = runner.Options(repeat=args.repeat, jobs=args.jobs, keep=args.keep, max_usd=args.max_usd,
-                          wait=not args.no_wait, run_id=args.run_id or "", force=args.force, resume=args.resume,
+                          wait=not args.no_wait, run_id=args.run_id or "", force=args.force, resume=args.resume, settle=args.settle,
                           echo=lambda msg: print(msg, flush=True))
     results = runner.run_set(es, vs, cases, opts)
     errors = [r for r in results if r.get("final_state") == "harness_error"]

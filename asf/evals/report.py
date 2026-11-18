@@ -112,7 +112,8 @@ def summarize(results: list[dict[str, Any]], baseline: str | None = None) -> dic
         summary[v] = {
             "kind": rows[0].get("kind", "factory"), "cases": len(cases), "runs": len(ok),
             "repeats": max(repeats.values()) if repeats else 0,
-            "skipped": sum(1 for r in rows if r.get("skipped")),
+            "skipped": sum(1 for r in rows if r.get("skipped") and not r.get("settled")),
+            "settled": sum(1 for r in rows if r.get("settled")),
             "harness_errors": sum(1 for r in rows if r.get("final_state") == "harness_error"),
             "states": dict(Counter(r.get("final_state", "?") for r in ok)),
             "spent_usd": round(sum(float(r.get("cost_usd") or 0) for r in ok), 2),
