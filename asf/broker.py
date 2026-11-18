@@ -7,6 +7,7 @@ is what contains prompt injection from tickets or repository content.
 
 from __future__ import annotations
 
+import difflib
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -221,13 +222,27 @@ class ToolBroker:
         p = self.sb.root / rel
         text = p.read_text()
         count = text.count(old_text)
+        how = ""
         if count == 0:
-            raise ValueError("old_text not found; read the file again and copy the exact text")
+            # Models often copy read_file's line numbers into old_text, or get indentation slightly
+            # wrong. Accept those only when exactly one place in the file fits.
+            if _numbered(old_text):
+                old_text, new_text = _unnumber(old_text), _unnumber(new_text) if _numbered(new_text) else new_text
+                count, how = text.count(old_text), " (read_file line numbers removed from old_text)"
+        if count == 0 and not replace_all:
+            fuzzy = loose_replace(text, old_text, new_text)
+            if fuzzy is not None:
+                p.write_text(fuzzy)
+                self.state.touched.add(rel)
+                return f"edited {rel} (1 replacement; matched ignoring indentation and trailing spaces)"
+        if count == 0:
+            raise ValueError("old_text not found; copy the exact text (without read_file's line numbers). "
+                             + nearest(text, old_text))
         if count > 1 and not replace_all:
             raise ValueError(f"old_text appears {count} times; include more context or set replace_all")
         p.write_text(text.replace(old_text, new_text) if replace_all else text.replace(old_text, new_text, 1))
         self.state.touched.add(rel)
-        return f"edited {rel} ({count if replace_all else 1} replacement)"
+        return f"edited {rel} ({count if replace_all else 1} replacement){how}"
 
     def t_delete_file(self, path: str) -> str:
         rel = self._rel(path)
@@ -353,3 +368,63 @@ def _all_specs(cfg: Config) -> list[ToolSpec]:
                        "summary": {"type": "string"},
                        "findings": {"type": "array", "items": finding}}, ["verdict", "summary"])),
     ]
+
+NUMBERED = re.compile(r"^ {0,6}\d+  ")
+
+
+def _numbered(text: str) -> bool:
+    """True when every non-blank line starts with read_file's line-number gutter."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return bool(lines) and all(NUMBERED.match(ln) for ln in lines)
+
+
+def _unnumber(text: str) -> str:
+    return "\n".join(NUMBERED.sub("", ln, count=1) for ln in text.split("\n"))
+
+
+def _indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def loose_replace(text: str, old: str, new: str) -> str | None:
+    """Replace the one block of whole lines that equals `old` once indentation and trailing spaces
+    are ignored; `new` is re-indented by the same shift. None unless exactly one block fits."""
+    want = [ln.strip() for ln in old.strip("\n").split("\n")]
+    if not any(want):
+        return None
+    lines = text.split("\n")
+    hits = [i for i in range(len(lines) - len(want) + 1)
+            if [ln.strip() for ln in lines[i:i + len(want)]] == want]
+    if len(hits) != 1:
+        return None
+    i = hits[0]
+    old_lines = old.strip("\n").split("\n")
+    first = next(k for k, w in enumerate(want) if w)
+    have, gave = _indent(lines[i + first]), _indent(old_lines[first])
+    out = []
+    for ln in new.strip("\n").split("\n"):
+        if ln.strip() and gave and ln.startswith(gave):
+            ln = have + ln[len(gave):]
+        elif ln.strip() and not gave:
+            ln = have + ln
+        out.append(ln)
+    return "\n".join(lines[:i] + out + lines[i + len(want):])
+
+
+def nearest(text: str, old: str) -> str:
+    """The part of the file most like `old`, with line numbers, to copy from on the next try."""
+    want = [ln.strip() for ln in old.strip("\n").split("\n") if ln.strip()]
+    lines = text.split("\n")
+    if not want or not lines:
+        return ""
+    n = max(1, len(old.strip("\n").split("\n")))
+    best, at = 0.0, 0
+    for i in range(0, max(1, len(lines) - n + 1)):
+        got = [ln.strip() for ln in lines[i:i + n] if ln.strip()]
+        r = difflib.SequenceMatcher(None, "\n".join(want), "\n".join(got)).quick_ratio()
+        if r > best:
+            best, at = r, i
+    if best < 0.5:
+        return "Nothing in the file looks like it; read the file again."
+    chunk = lines[at:at + n + 2]
+    return "The closest text in the file is:\n" + "\n".join(f"{at + k + 1:>5}  {ln}" for k, ln in enumerate(chunk))

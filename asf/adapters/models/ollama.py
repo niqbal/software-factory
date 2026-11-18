@@ -12,7 +12,7 @@ Settings (factory.yaml, under `models:`):
     num_ctx: 32768                     # context window; Ollama's default is far too small for an agent
     timeout_s: 1800                    # per turn
     retries: 2
-    think: false                       # true lets thinking models think (slower)
+    think: auto                        # auto: think except at low effort; true / false to force
     keep_alive: 30m
 
 Local models cost nothing per token; runs report $0 and are compared on resolved rate and minutes.
@@ -48,8 +48,9 @@ def _parse(content: str) -> dict[str, Any] | None:
 
 
 class OllamaConversation(Conversation):
-    def __init__(self, provider: "OllamaProvider", model: str, system: str, tools: list[ToolSpec]):
-        self.p, self.model = provider, model
+    def __init__(self, provider: "OllamaProvider", model: str, system: str, tools: list[ToolSpec],
+                 effort: str = "medium"):
+        self.p, self.model, self.think = provider, model, provider.thinks(effort)
         specs = "\n".join(f"- {t.name}: {t.description}\n  schema: {json.dumps(t.schema)}" for t in tools)
         self.messages: list[dict[str, str]] = [{"role": "system", "content": system + PROTOCOL + specs}]
         self.pending: list[str] = []
@@ -68,7 +69,7 @@ class OllamaConversation(Conversation):
         usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         last = ""
         for _ in range(self.p.retries + 1):
-            d = self.p.chat(self.model, self.messages, TURN_SCHEMA)
+            d = self.p.chat(self.model, self.messages, TURN_SCHEMA, self.think)
             for k, v in _usage(d).items():
                 usage[k] += v
             content = ((d.get("message") or {}).get("content") or "").strip()
@@ -102,7 +103,7 @@ class OllamaProvider(ModelProvider):
         self.num_ctx = int(self.settings.get("num_ctx", 32768))
         self.timeout = int(self.settings.get("timeout_s", 1800))
         self.retries = int(self.settings.get("retries", 2))
-        self.think = bool(self.settings.get("think", False))
+        self.think = self.settings.get("think", "auto")
         self.keep_alive = str(self.settings.get("keep_alive", "30m"))
 
     def credentials_problem(self) -> str | None:
@@ -113,9 +114,15 @@ class OllamaProvider(ModelProvider):
             return f"Ollama is not answering at {self.base_url} ({e}): start it with `ollama serve`"
         return None
 
-    def chat(self, model: str, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+    def thinks(self, effort: str) -> bool:
+        if isinstance(self.think, bool):
+            return self.think
+        return effort not in ("low", "minimal", "")
+
+    def chat(self, model: str, messages: list[dict[str, str]], schema: dict[str, Any],
+             think: bool = False) -> dict[str, Any]:
         body = {"model": model, "messages": messages, "stream": False, "format": schema,
-                "think": self.think, "keep_alive": self.keep_alive,
+                "think": think, "keep_alive": self.keep_alive,
                 "options": {"num_ctx": self.num_ctx, "temperature": 0.2}}
         req = urllib.request.Request(self.base_url + "/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -132,14 +139,14 @@ class OllamaProvider(ModelProvider):
 
     def conversation(self, model: str, system: str, tools: list[ToolSpec],
                      effort: str = "medium", max_tokens: int = 16000) -> Conversation:
-        return OllamaConversation(self, model, system, tools)
+        return OllamaConversation(self, model, system, tools, effort)
 
     def structured(self, model: str, system: str, prompt: str, schema: dict[str, Any],
                    effort: str = "low") -> tuple[dict[str, Any], ModelTurn]:
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         last = ""
         for _ in range(self.retries + 1):
-            d = self.chat(model, msgs, schema)
+            d = self.chat(model, msgs, schema, self.thinks(effort))
             content = ((d.get("message") or {}).get("content") or "").strip()
             out = _parse(content)
             if out is not None:

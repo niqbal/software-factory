@@ -66,14 +66,14 @@ BUILTIN: dict[str, dict[str, Any]] = {
                   "replace": ["models"],
                   "overlay": {"models": {"provider": "claude_code", "timeout_s": 900, "roles": OPUS_HIGH}}},
     # Local models through Ollama, every role on one model, tools emulated as JSON.
-    "local_gemma": {"description": "every role on Gemma 4 E4B (local, Ollama) with tools emulated as JSON",
+    "local_gemma": {"description": "every role on Gemma 4 E4B (local, Ollama) with tools emulated as JSON; thinks above low effort",
                     "replace": ["models"],
                     "overlay": {"models": {"provider": "ollama", "num_ctx": 32768,
-                                           "roles": {r: {"model": "gemma4:e4b-it-qat"} for r in CLAUDE_ROLES}}}},
+                                           "roles": {r: {**v, "model": "gemma4:e4b-it-qat"} for r, v in CLAUDE_ROLES.items()}}}},
     "local_qwen": {"description": "every role on Qwen 3.5 9B (local, Ollama) with tools emulated as JSON",
                    "replace": ["models"],
                    "overlay": {"models": {"provider": "ollama", "num_ctx": 32768,
-                                          "roles": {r: {"model": "qwen3.5:9b-mtp-q4_K_M"} for r in CLAUDE_ROLES}}}},
+                                          "roles": {r: {**v, "model": "qwen3.5:9b-mtp-q4_K_M"} for r, v in CLAUDE_ROLES.items()}}}},
     "interactive": {"description": "baseline: plain claude -p with default tools on the ticket text, no factory",
                     "kind": "interactive", "settings": {}},
 }

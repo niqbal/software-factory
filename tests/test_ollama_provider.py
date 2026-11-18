@@ -55,6 +55,7 @@ def test_turns_keep_history_constrain_format_and_retry_bad_json(server):
     assert t2.tool_calls[0].name == "finish" and t2.tool_calls[0].id != t1.tool_calls[0].id
     first, second, third = seen
     assert first["format"]["required"] == ["text", "tool_calls"] and first["options"]["num_ctx"] == 8192
+    assert first["think"] is True  # medium effort thinks; low effort would not
     assert first["messages"][0]["role"] == "system" and "read_file" in first["messages"][0]["content"]
     assert "contents" in second["messages"][-1]["content"]          # tool results go back as a user turn
     assert "not a JSON object" in third["messages"][-1]["content"]  # a bad reply is asked again
