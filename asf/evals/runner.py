@@ -155,13 +155,15 @@ def _finished(run_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
-def _wait_while_paused(run_dir: Path, tag: str, opts: Options) -> None:
-    """A file named PAUSE in the run folder holds back new runs (runs already going finish).
-    Used to keep a share of a backend's quota for other work: create it to pause, delete it to go on."""
+def _wait_while_paused(run_dir: Path, tag: str, opts: Options, variant: Variant) -> None:
+    """A file named PAUSE in the run folder holds back new runs (runs already going finish);
+    PAUSE.<backend> (claude, cursor) holds back only the variants on that backend. Used to keep a
+    share of a backend's quota for other work: create it to pause, delete it to go on."""
+    names = ["PAUSE"] + [f"PAUSE.{b}" for b in variant.backends({})]
     told = False
-    while (run_dir / "PAUSE").exists():
+    while any((run_dir / n).exists() for n in names):
         if not told:
-            opts.echo(f"{tag} paused: {run_dir / 'PAUSE'} exists")
+            opts.echo(f"{tag} paused by a PAUSE file in {run_dir}")
             told = True
         opts.sleep(30)
 
@@ -186,7 +188,7 @@ def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Option
         prev = json.loads(done.read_text())
         if prev.get("finished") and not prev.get("skipped") and not prev.get("error"):
             return prev
-    _wait_while_paused(evalset.runs_dir / opts.run_id, tag, opts)
+    _wait_while_paused(evalset.runs_dir / opts.run_id, tag, opts, variant)
     with opts._lock:
         over = opts.max_usd is not None and opts.spent >= opts.max_usd
     if over:
