@@ -32,7 +32,8 @@ KINDS = {"claude_code": "asf.adapters.models.claude_code:ClaudeCodeProvider",
          "cursor_cli": "asf.adapters.models.cursor_cli:CursorProvider",
          "cursor_native": "asf.adapters.models.cursor_native:CursorNativeProvider",
          "anthropic": "asf.adapters.models.anthropic_provider:AnthropicProvider",
-         "scripted": "asf.adapters.models.scripted:ScriptedProvider"}
+         "scripted": "asf.adapters.models.scripted:ScriptedProvider",
+         "ollama": "asf.adapters.models.ollama:OllamaProvider"}
 
 
 class AllBackendsLimited(RuntimeError):

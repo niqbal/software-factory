@@ -284,6 +284,7 @@ BUILTIN: dict[str, dict[str, str]] = {
         "cursor_cli": "asf.adapters.models.cursor_cli:CursorProvider",
         "cursor_native": "asf.adapters.models.cursor_native:CursorNativeProvider",
         "pool": "asf.adapters.models.pool:PoolProvider",
+        "ollama": "asf.adapters.models.ollama:OllamaProvider",
     },
 }
 

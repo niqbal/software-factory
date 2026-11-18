@@ -65,6 +65,15 @@ BUILTIN: dict[str, dict[str, Any]] = {
     "opus-high": {"description": "claude_code with every role on Opus at high effort",
                   "replace": ["models"],
                   "overlay": {"models": {"provider": "claude_code", "timeout_s": 900, "roles": OPUS_HIGH}}},
+    # Local models through Ollama, every role on one model, tools emulated as JSON.
+    "local_gemma": {"description": "every role on Gemma 4 E4B (local, Ollama) with tools emulated as JSON",
+                    "replace": ["models"],
+                    "overlay": {"models": {"provider": "ollama", "num_ctx": 32768,
+                                           "roles": {r: {"model": "gemma4:e4b-it-qat"} for r in CLAUDE_ROLES}}}},
+    "local_qwen": {"description": "every role on Qwen 3.5 9B (local, Ollama) with tools emulated as JSON",
+                   "replace": ["models"],
+                   "overlay": {"models": {"provider": "ollama", "num_ctx": 32768,
+                                          "roles": {r: {"model": "qwen3.5:9b-mtp-q4_K_M"} for r in CLAUDE_ROLES}}}},
     "interactive": {"description": "baseline: plain claude -p with default tools on the ticket text, no factory",
                     "kind": "interactive", "settings": {}},
 }
@@ -75,7 +84,7 @@ INTERACTIVE_TOOLS = ["Bash", "Read", "Edit", "MultiEdit", "Write", "Glob", "Grep
                      "Task", "NotebookEdit"]
 # Backend names for usage limits (asf/limits.py), as the scheduler names them.
 BACKEND_OF = {"claude_code": "claude", "claude_code_native": "claude", "cursor_cli": "cursor",
-              "cursor_native": "cursor"}
+              "cursor_native": "cursor", "ollama": "ollama"}
 
 
 @dataclass
