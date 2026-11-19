@@ -307,8 +307,10 @@ def _wait_for_backends(backends: list[str], opts: Options, echo: Callable[[str],
             raise LimitStop(f"usage limit on {', '.join(backends)} until {lift:%H:%M}")
         secs = max(30.0, (lift - datetime.now().astimezone()).total_seconds())
         echo(f"usage limit on {', '.join(backends)}; waiting until {lift:%H:%M}")
+        t0 = time.time()
         opts.sleep(min(secs, 600))
-        waited += min(secs, 600)
+        # The wall clock, not the requested sleep: a machine that sleeps meanwhile waits longer.
+        waited += max(time.time() - t0, min(secs, 600))
 
 
 # ----------------------------------------------------------------------------- factory variants
@@ -361,7 +363,7 @@ def _factory(case: Case, variant: Variant, work: Path, out_dir: Path, opts: Opti
     patch = _candidate_patch(f, store.job(job_id), co, base, cfg, metrics)
     # Cursor reports tokens, not dollars: its costs are usd_per_mtok estimates.
     estimated = "cursor" in variant.backends(cfg.raw)
-    out = {**metrics, "cost_estimated": estimated, "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
+    out = {**metrics, "cost_estimated": estimated, "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1), "wait_clock": "wall",
            "limit_hits": limit_hits, "config_hash": cfg.version_hash}
     out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo,
                       opts.checks.get(case.id)))
@@ -448,7 +450,7 @@ def _interactive(case: Case, variant: Variant, work: Path, out_dir: Path, opts: 
            "visible_pass": visible, "gates": gates, "gates_first_try": visible if gates else None,
            "fix_rounds": 0, "rounds": {}, "review_blocking": 0, "denials": denials, "cost_usd": round(cost, 4),
            "turns": turns, "auto_retries": 0, "stop_reason": outcome if final != "finished" else "",
-           "summary": outcome[:2000], "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
+           "summary": outcome[:2000], "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1), "wait_clock": "wall",
            "limit_hits": limit_hits, "config_hash": cfg.version_hash}
     out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo,
                       opts.checks.get(case.id)))

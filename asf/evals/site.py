@@ -20,7 +20,7 @@ from typing import Any
 
 import yaml
 
-from .report import sample_values
+from .report import corrected, sample_values
 
 LIMIT = 60_000  # characters of one file or diff shown in the page
 
@@ -61,7 +61,7 @@ def sample_row(r: dict[str, Any], set_name: str, asf: str, path: str = "") -> di
         "resolved": v["resolved"], "hidden_rate": v["hidden_rate"], "visible": v["visible"], "gap": v["gap"],
         "first_try": v["first_try"], "fix_rounds": v["fix_rounds"], "denials": v["denials"],
         "cost_usd": round(v["cost_usd"], 4), "cost_estimated": bool(r.get("cost_estimated")),
-        "minutes": round(v["minutes"], 2), "size_ratio": v["size_ratio"],
+        "minutes": None if v["minutes"] is None else round(v["minutes"], 2), "size_ratio": v["size_ratio"],
         "final_state": r.get("final_state") or "", "stop_reason": (r.get("stop_reason") or r.get("error") or "")[:300],
         "fixed": h.get("fixed"), "fail_to_pass": h.get("fail_to_pass"), "broken": len(h.get("broken") or []),
         "started": r.get("started"), "finished": r.get("finished"),
@@ -123,6 +123,7 @@ def collect(root: Path) -> dict[str, Any]:
             for f in sorted(rdir.glob("*/*/result.json")):
                 r = _read(f)
                 if r:
+                    r = corrected(r, f.parent)
                     row = sample_row(r, sdir.name, asf, str(f.parent.relative_to(root)))
                     row["files"] = [a for a in ARTIFACTS if (f.parent / a).exists()]
                     data["samples"].append(row)

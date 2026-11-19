@@ -508,3 +508,22 @@ def test_a_repeat_is_skipped_once_the_first_ones_agree(tmp_path):
     assert settled(tmp_path, "errored", 3, 2) == ""    # an infra error is not an answer
     assert settled(tmp_path, "pending", 3, 2) == ""    # the second is not finished yet
     assert settled(tmp_path, "same", 2, 2) == "" and settled(tmp_path, "same", 3, 0) == ""
+
+
+def test_report_reprices_inflated_claude_calls_and_drops_minutes_of_limited_runs(tmp_path):
+    # Before the fix a resumed session charged its running total; the tokens were right.
+    rows = [{"model": "claude-opus-5-5", "input_tokens": 0, "output_tokens": 1000, "cache_read": 0,
+             "cache_write": 0, "cost_usd": 5.0},                       # inflated: fair price $0.02
+            {"model": "claude-opus-5-5", "input_tokens": 0, "output_tokens": 1000, "cache_read": 0,
+             "cache_write": 0, "cost_usd": 0.02},                      # already right
+            {"model": "grok-4.7", "input_tokens": 0, "output_tokens": 1000, "cost_usd": 0.0}]
+    (tmp_path / "runs.json").write_text(json.dumps(rows))
+    r = report_mod.corrected({"cost_usd": 5.02, "minutes": 9.0}, tmp_path)
+    assert r["cost_usd"] == pytest.approx(0.04) and r["cost_usd_recorded"] == 5.02 and r["cost_corrected"]
+    rows[0]["cost_usd"] = 0.02
+    (tmp_path / "runs.json").write_text(json.dumps(rows))
+    assert "cost_corrected" not in report_mod.corrected({"cost_usd": 0.04}, tmp_path)
+    assert report_mod.sample_values({"minutes": 390.0, "limit_hits": 1})["minutes"] is None
+    assert report_mod.sample_values({"minutes": 390.0, "waited_minutes": 300})["minutes"] is None
+    assert report_mod.sample_values({"minutes": 9.0, "limit_hits": 0})["minutes"] == 9.0
+    assert report_mod.sample_values({"minutes": 9.0, "limit_hits": 1, "wait_clock": "wall"})["minutes"] == 9.0

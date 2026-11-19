@@ -132,3 +132,15 @@ def test_a_resumed_turn_costs_only_what_the_session_total_grew_by(fake):
         costs.append(t.cost_usd)
         conv.add_tool_results([(c.id, "x", False) for c in t.tool_calls])
     assert costs == pytest.approx([0.01, 0.02, 0.005]) and sum(costs) == pytest.approx(0.035)
+
+
+def test_call_cost_of_a_session_resumed_in_another_process_comes_from_its_tokens():
+    from asf.adapters.models.claude_code import call_cost
+    fresh = {"session_id": "X1", "total_cost_usd": 0.5}
+    assert call_cost(fresh, "claude-opus-5-5", resumed=False) == 0.5
+    assert call_cost({"session_id": "X1", "total_cost_usd": 0.8}, "claude-opus-5-5", resumed=True) == pytest.approx(0.3)
+    # Unknown session: its running total says nothing about this call, so price the call's tokens
+    # (Opus: $4/M in, $20/M out, cache writes at the 1-hour rate of $8/M).
+    d = {"session_id": "X2", "total_cost_usd": 9.0,
+         "usage": {"input_tokens": 1000, "output_tokens": 1000, "cache_creation_input_tokens": 1000}}
+    assert call_cost(d, "claude-opus-5-5", resumed=True) == pytest.approx((4 + 20 + 8) / 1000)

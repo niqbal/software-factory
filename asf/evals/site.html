@@ -144,12 +144,12 @@ function stats(ss) {
   return {n: sc.length, errors: ss.length - sc.length, resolved, rate: res.length ? resolved / res.length : null,
     hidden: mean(sc.filter(s => s.hidden_rate != null).map(s => s.hidden_rate)), visible: mean(sc.map(s => s.visible)),
     gap: mean(sc.filter(s => s.gap != null).map(s => s.gap)), first: mean(sc.filter(s => s.first_try != null).map(s => s.first_try)),
-    cost, est: sc.some(s => s.cost_estimated), perResolved: resolved ? cost / resolved : null, minutes: mean(sc.map(s => s.minutes)),
+    cost, est: sc.some(s => s.cost_estimated), perResolved: resolved ? cost / resolved : null, minutes: mean(sc.map(s => s.minutes).filter(m => m != null)),
     ci: wilson(resolved, res.length)};
 }
 function wilson(k, n) { if (!n) return null; const z = 1.96, p = k / n, d = 1 + z * z / n, c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d; return [Math.max(0, c - h), Math.min(1, c + h)]; }
 function dotHtml(o, s, extra) {
-  const tip = s ? `${s.variant} · ${s.case} · r${s.repeat}<br><b>${LABEL[o]}</b>${s.fail_to_pass != null ? ` · fixed ${s.fixed}/${s.fail_to_pass} target tests` : ""}${s.broken ? ` · broke ${s.broken}` : ""}<br>${s.final_state}${s.stop_reason ? " — " + esc(s.stop_reason) : ""}<br>${money(s.cost_usd)}${s.cost_estimated ? " (est.)" : ""} · ${s.minutes.toFixed(1)} min · run ${s.run}` : extra || LABEL[o];
+  const tip = s ? `${s.variant} · ${s.case} · r${s.repeat}<br><b>${LABEL[o]}</b>${s.fail_to_pass != null ? ` · fixed ${s.fixed}/${s.fail_to_pass} target tests` : ""}${s.broken ? ` · broke ${s.broken}` : ""}<br>${s.final_state}${s.stop_reason ? " — " + esc(s.stop_reason) : ""}<br>${money(s.cost_usd)}${s.cost_estimated ? " (est.)" : ""} · ${s.minutes != null ? s.minutes.toFixed(1) + " min" : "minutes n/a (hit a usage limit)"} · run ${s.run}` : extra || LABEL[o];
   return `<span class="dot o-${o}" data-tip="${esc(tip)}" aria-label="${LABEL[o]}">${GLYPH[o]}</span>`;
 }
 const legendHtml = () => `<div class="legend">${["resolved","partial","not_delivered","error","settled","running","pending"].map(o => `<span>${dotHtml(o, null)} ${LABEL[o]}</span>`).join("")}</div>`;
@@ -302,7 +302,7 @@ function viewCases() {
       const el = "case-" + id.replace(/[^\w-]/g, "_");
       h += `<tr><td colspan="${3 + variants.length}" style="background:var(--head);white-space:normal"><div class="detail"><div id="${el}"><p class="small">Loading…</p></div>
         <div class="box"><h3>Every run of this case</h3><div class="wrap"><table><thead><tr><th>run</th><th>variant</th><th>r</th><th>outcome</th><th class="num">target tests</th><th class="num">broke</th><th>final state</th><th class="num">cost</th><th class="num">min</th><th>files</th><th>why it stopped</th></tr></thead><tbody>` +
-        cs.sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => `<tr><td>${esc(s.run)}</td><td>${sw(s.variant)} ${esc(s.variant)}</td><td>${s.repeat}</td><td>${dotHtml(s.outcome, s)} ${LABEL[s.outcome]}</td><td class="num">${s.fail_to_pass != null ? `${s.fixed}/${s.fail_to_pass}` : "–"}</td><td class="num">${s.broken || ""}</td><td>${esc(s.final_state)}</td><td class="num">${s.cost_estimated ? "est. " : ""}${money(s.cost_usd)}</td><td class="num">${s.minutes.toFixed(1)}</td><td class="links">${s.files.map(f => `<a href="${ART}${esc(s.path)}/${esc(f)}" target="_blank">${esc(f.replace("candidate.diff", "agent's diff"))}</a>`).join("")}</td><td class="wrapcell small">${esc(s.stop_reason)}</td></tr>`).join("") + `</tbody></table></div></div></div></td></tr>`;
+        cs.sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => `<tr><td>${esc(s.run)}</td><td>${sw(s.variant)} ${esc(s.variant)}</td><td>${s.repeat}</td><td>${dotHtml(s.outcome, s)} ${LABEL[s.outcome]}</td><td class="num">${s.fail_to_pass != null ? `${s.fixed}/${s.fail_to_pass}` : "–"}</td><td class="num">${s.broken || ""}</td><td>${esc(s.final_state)}</td><td class="num">${s.cost_estimated ? "est. " : ""}${money(s.cost_usd)}</td><td class="num">${s.minutes != null ? s.minutes.toFixed(1) : "–"}</td><td class="links">${s.files.map(f => `<a href="${ART}${esc(s.path)}/${esc(f)}" target="_blank">${esc(f.replace("candidate.diff", "agent's diff"))}</a>`).join("")}</td><td class="wrapcell small">${esc(s.stop_reason)}</td></tr>`).join("") + `</tbody></table></div></div></div></td></tr>`;
       lazy(`cases/${encodeURIComponent(set)}/${encodeURIComponent(id)}.json`, el, caseDetail);
     }
   });

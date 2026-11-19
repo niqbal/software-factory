@@ -302,7 +302,7 @@ class NativeSessions:
         """Tool calls a stream message starts."""
         raise NotImplementedError
 
-    def _outcome(self, msg: dict[str, Any], model: str, tools: int) -> Outcome:
+    def _outcome(self, msg: dict[str, Any], model: str, tools: int, resumed: bool = False) -> Outcome:
         raise NotImplementedError
 
     def _mcp_name(self, tool: str) -> str:
@@ -382,6 +382,7 @@ class NativeSessions:
             env = self._env(sb, bridge)
             for _ in range(2):
                 calls_before = sum(tools_used.values())
+                resumed = session is not None
                 args, stdin = self._command(model, effort, system, prompt, tmp, max_turns, session,
                                             None if usd_left is None else usd_left - result.cost_usd)
                 started = time.time()
@@ -392,7 +393,7 @@ class NativeSessions:
                         raise self.error_cls(f"{self.cli_name} ended without a result: {err.strip()[-300:]}")
                     stop = "timed out"
                     break
-                out = self._outcome(msg, model, sum(tools_used.values()) - calls_before)
+                out = self._outcome(msg, model, sum(tools_used.values()) - calls_before, resumed)
                 session = out.session or session
                 result.turns += out.turns
                 result.input_tokens += out.turn.usage.get("input", 0) + out.turn.usage.get("cache_read", 0)

@@ -109,3 +109,11 @@ def store(state: Path) -> Store:
 
 def load_cfg(text: str) -> config_mod.Config:
     return config_mod.load(text=text)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_claude_session_totals():
+    # Claude Code session totals are remembered per process; fake CLIs reuse session ids.
+    from asf.adapters.models import claude_code
+    claude_code._SESSION_TOTALS.clear()
+    yield

@@ -193,6 +193,9 @@ def test_nudged_once_then_resumed(fake, sb):
     assert second["args"][second["args"].index("--resume") + 1] == "S-1"
     assert "mcp__asf__finish" in second["prompt"]
     assert res.ok and res.data["nudged"] and res.turns == 6 and len(turns) == 2
+    # Both calls resume a session this process has no total for: the CLI's 0.25 is the session's
+    # running total, so each call is priced from its own tokens (10 in, 20 out, 300 cache reads).
+    assert [t.cost_usd for _, t in turns] == pytest.approx([0.0005, 0.0005])
 
     p = setup([{"steps": []}, {"steps": []}])
     res = run_agent(p, cfg, "implementer", "S", "task", ToolBroker(box, cfg, "implementer", tier=2), charger()[1])

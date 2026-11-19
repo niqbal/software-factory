@@ -25,6 +25,7 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any, Callable
 
+from ..adapters.models.prices import cost_of
 from .cases import EvalSet
 
 RATE_METRICS = ["resolved", "hidden_rate", "visible", "gap", "first_try"]
@@ -48,8 +49,34 @@ def load_results(evalset: EvalSet, runs: list[str] | None = None,
         if variants and r.get("variant") not in variants:
             continue
         r["_path"] = str(p.parent)
-        out.append(r)
+        out.append(corrected(r, p.parent))
     return out
+
+
+def corrected(r: dict[str, Any], folder: Path) -> dict[str, Any]:
+    """Undo a known recording bug in older results. Before the fix, a resumed Claude Code session
+    charged its running total on every call, so a long role cost many times its real price. Every
+    call's tokens were recorded correctly, so a call billed above its token price (1-hour cache
+    writes, as Claude Code bills, plus a margin) is re-priced from its tokens. The original stays
+    in `cost_usd_recorded`."""
+    try:
+        rows = json.loads((folder / "runs.json").read_text())
+    except (OSError, ValueError):
+        return r
+    total, changed = 0.0, False
+    for row in rows if isinstance(rows, list) else []:
+        cost = float(row.get("cost_usd") or 0)
+        model = str(row.get("model") or "")
+        if "claude" in model:
+            fair = cost_of(model, {"input": row.get("input_tokens") or 0, "output": row.get("output_tokens") or 0,
+                                   "cache_read": row.get("cache_read") or 0,
+                                   "cache_write": row.get("cache_write") or 0}, hour_cache=True)
+            if cost > fair * 1.1 + 0.01:
+                cost, changed = fair, True
+        total += cost
+    if changed:
+        r = {**r, "cost_usd_recorded": r.get("cost_usd"), "cost_usd": round(total, 4), "cost_corrected": True}
+    return r
 
 
 def sample_values(r: dict[str, Any]) -> dict[str, float | None]:
@@ -70,7 +97,10 @@ def sample_values(r: dict[str, Any]) -> dict[str, float | None]:
         "fix_rounds": float(r.get("fix_rounds") or 0),
         "denials": float(r.get("denials") or 0),
         "cost_usd": float(r.get("cost_usd") or 0),
-        "minutes": float(r.get("minutes") or 0),
+        # Runners before the fix timed a usage-limit wait by the sleep they asked for, so a machine
+        # that slept meanwhile counted hours of it as work: such a run's minutes are left out.
+        "minutes": (None if (r.get("limit_hits") or r.get("waited_minutes")) and r.get("wait_clock") != "wall"
+                    else float(r.get("minutes") or 0)),
         "size_ratio": None if size is None else float(size),
     }
 
