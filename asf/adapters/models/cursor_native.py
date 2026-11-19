@@ -132,7 +132,7 @@ class CursorNativeProvider(NativeSessions, CursorProvider):
             return []
         return [k.removesuffix("ToolCall") for k in (msg.get("tool_call") or {}) if k.endswith("ToolCall")]
 
-    def _outcome(self, msg: dict[str, Any], model: str, tools: int) -> Outcome:
+    def _outcome(self, msg: dict[str, Any], model: str, tools: int, resumed: bool = False) -> Outcome:
         usage = _usage(msg)
         subtype = str(msg.get("subtype") or "")
         failed = bool(msg.get("is_error")) or subtype not in ("", "success")

@@ -28,7 +28,7 @@ from typing import Any, Callable
 from ...broker import ToolBroker
 from ...util import sandbox_env
 from ..base import AdapterContext, ModelTurn
-from .claude_code import ClaudeCodeError, ClaudeCodeProvider, _usage
+from .claude_code import ClaudeCodeError, ClaudeCodeProvider, _usage, call_cost
 from .native import BRIDGE, Bridge, NativeSessions, Outcome, ToolNames, tool_notes
 
 NATIVE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task", "Skill"]
@@ -104,10 +104,10 @@ class ClaudeNativeProvider(NativeSessions, ClaudeCodeProvider):
         return [b.get("name", "") for b in (msg.get("message") or {}).get("content") or []
                 if isinstance(b, dict) and b.get("type") == "tool_use"]
 
-    def _outcome(self, msg: dict[str, Any], model: str, tools: int) -> Outcome:
+    def _outcome(self, msg: dict[str, Any], model: str, tools: int, resumed: bool = False) -> Outcome:
         subtype = str(msg.get("subtype") or "")
         turn = ModelTurn(text=str(msg.get("result") or "")[:2000], tool_calls=[], stop_reason=subtype,
-                         usage=_usage(msg), cost_usd=float(msg.get("total_cost_usd") or 0),
+                         usage=_usage(msg), cost_usd=call_cost(msg, model, resumed),
                          model=next(iter(msg.get("modelUsage") or {}), model))
         error = ""
         if msg.get("is_error") and subtype not in STOPS:

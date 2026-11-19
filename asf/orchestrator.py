@@ -40,6 +40,7 @@ TRIAGE_SCHEMA = {
         "automatable": {"type": "boolean"},
         "reason_if_not": {"type": "string"},
         "clarification_needed": {"type": "string"},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
         "manual_verification": {"type": "array", "items": {"type": "string"}},
         "repro": {
             "type": "object",
@@ -57,7 +58,7 @@ TRIAGE_SCHEMA = {
         },
     },
     "required": ["summary", "acceptance_criteria", "likely_paths", "tier_guess", "automatable",
-                 "reason_if_not", "clarification_needed", "manual_verification", "repro"],
+                 "reason_if_not", "clarification_needed", "assumptions", "manual_verification", "repro"],
     "additionalProperties": False,
 }
 MONTH = 30 * 24 * 3600
@@ -73,7 +74,9 @@ MARKER = "<!-- asf:{kind} {job} -->"
 TRANSIENT_ERRORS = [re.compile(p, re.I) for p in (
     r"\bHTTP 5\d\d\b", r"\[unavailable\]", r"service unavailable", r"bad gateway",
     r"gateway time-?out", r"timed? ?out", r"connection (reset|refused|aborted|error)",
-    r"temporar(il)?y", r"network", r"ECONNRESET", r"EPIPE", r"broken pipe", r"internal server error",
+    r"temporar(il)?y", r"network", r"ECONNRESET", r"ETIMEDOUT", r"EPIPE",
+    r"broken pipe", r"internal server error",
+    r"Cannot use this model",  # cursor-agent, briefly, for a model it does list
 )]
 
 
@@ -701,6 +704,7 @@ class Factory:
         plan, why_not = self._repro_plan(item, triage)
         self.store.update_job(job["id"], "triaged", tier=None, pre_tier=pre, triage=triage,
                               acceptance=acceptance, manual_verification=triage.get("manual_verification", []),
+                              assumptions=_strings(triage.get("assumptions")),
                               repro_plan=plan)
         if why_not and (triage.get("repro") or {}).get("applicable"):
             self.store.event(job["id"], "repro.skipped", "factory", {"reason": why_not})
@@ -721,9 +725,20 @@ class Factory:
         self.store.update_job(job["id"], "reproducing" if reproduce else "implementing",
                               sandbox=sb.describe(), branch=branch)
 
+    def _brief(self, job: dict[str, Any], item: WorkItem) -> str:
+        """The work item with its acceptance criteria, the requester's answers, and the assumptions
+        triage made instead of stopping to ask."""
+        text = work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
+        assumed = job["data"].get("assumptions") or []
+        if assumed:
+            text += ("\n\nAssumptions made where the item is not explicit (the requester did not state "
+                     "these; follow them unless the repository clearly shows otherwise, and say in your "
+                     "summary if you had to depart from one):\n" + "\n".join(f"- {a}" for a in assumed))
+        return text
+
     def _task(self, job: dict[str, Any], extra: str = "") -> str:
         item = self._item(job)
-        text = work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
+        text = self._brief(job, item)
         revision = self._active_revision(job)
         if revision:
             text += ("\n\nThis change was already delivered on this branch; the working tree contains it. "
@@ -773,7 +788,7 @@ class Factory:
     def _s_testing(self, job: dict[str, Any]) -> None:
         tier = self._current_tier(job)
         item = self._item(job)
-        task = (work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
+        task = (self._brief(job, item)
                 + "\n\nThe implementation is in the working tree. Read it with show_diff.")
         revision = self._active_revision(job)
         if revision:
@@ -1137,7 +1152,7 @@ class Factory:
         item = self._item(job)
         gates = "\n".join(f"- {g['name']}{'/' + g['package'] if g['package'] else ''}: {g['status']} "
                           f"({g['detail']})" for g in job["data"].get("gates", []))
-        task = (work_item_block(item, job["data"].get("acceptance", []), job["data"].get("answers"))
+        task = (self._brief(job, item)
                 + f"\n\nRisk tier: {tier}. Deterministic gates already run:\n{gates}\n\n"
                   "Review the change in the working tree with show_diff.")
         reviews, blocking, should_fix, optional = {}, [], [], []
@@ -1536,6 +1551,10 @@ class Factory:
                 self._sandbox(self.store.job(job["id"])).destroy()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _strings(v: Any) -> list[str]:
+    return [x.strip() for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
 
 
 def _real_question(q: Any) -> bool:

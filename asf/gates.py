@@ -125,8 +125,7 @@ class GateRunner:
         return GateResult("diff_size", status, f"{total} changed lines (limit {limit} at tier {self.tier})")
 
     def g_test_integrity(self, changed: list[str], diff: str) -> GateResult:
-        problems = []
-        may_edit = policy.may_edit_existing_tests(self.cfg, self.tier)
+        problems, support = [], []
         for path in changed:
             if not self.cfg.is_test_path(path):
                 continue
@@ -136,8 +135,10 @@ class GateRunner:
             current = self.sb.root / path
             if not current.exists():
                 problems.append(f"deleted existing test {path}")
-            elif not may_edit:
+            elif policy.frozen_test(self.cfg, self.tier, path, base):
                 problems.append(f"modified existing test {path}")
+            elif not policy.defines_tests(path, base):
+                support.append(path)
             else:
                 removed = len(re.findall(r"\b(expect|assert|should)\b", base))
                 kept = len(re.findall(r"\b(expect|assert|should)\b", current.read_text(errors="replace")))
@@ -151,13 +152,15 @@ class GateRunner:
                 problems.append(f"modified the reproduction {path} (committed before the fix; changing it "
                                 "needs the owner's approval)")
         code_changed = [p for p in changed if is_code(p) and not self.cfg.is_test_path(p)]
-        tests_changed = [p for p in changed if self.cfg.is_test_path(p)]
+        tests_changed = [p for p in changed if self.cfg.is_test_path(p) and p not in support]
         if (self.cfg.get("limits.require_tests_for_code_changes", True) and self.tier >= 1
                 and code_changed and not tests_changed):
             problems.append("code changed but no tests were added or updated")
+        note = (f"; test support changed (review that it still matches the real code): {', '.join(support)}"
+                if support else "")
         if problems:
-            return GateResult("test_integrity", "fail", "; ".join(problems))
-        return GateResult("test_integrity", "pass", f"{len(tests_changed)} test files added or extended")
+            return GateResult("test_integrity", "fail", "; ".join(problems) + note)
+        return GateResult("test_integrity", "pass", f"{len(tests_changed)} test files added or extended{note}")
 
     def g_dependency_policy(self, changed: list[str], diff: str) -> GateResult:
         added: list[str] = []

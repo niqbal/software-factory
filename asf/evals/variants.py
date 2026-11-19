@@ -36,13 +36,14 @@ CLAUDE_ROLES = {
     "security": {"model": "claude-sonnet-5-5", "effort": "medium"},
     "ci_fixer": {"model": "claude-opus-5-5", "effort": "medium"},
 }
+# Cursor variants run Grok 4.7, effort per role as the Claude variants set it.
 CURSOR_ROLES = {
-    "triage": {"model": "gpt-5.3-codex-low"},
-    "implementer": {"model": "gpt-5.3-codex-high"},
-    "tester": {"model": "gpt-5.3-codex"},
-    "reviewer": {"model": "gpt-5.3-codex"},
-    "security": {"model": "gpt-5.3-codex"},
-    "ci_fixer": {"model": "gpt-5.3-codex"},
+    "triage": {"model": "grok-4.7-low"},
+    "implementer": {"model": "grok-4.7-high"},
+    "tester": {"model": "grok-4.7-medium"},
+    "reviewer": {"model": "grok-4.7-high"},
+    "security": {"model": "grok-4.7-medium"},
+    "ci_fixer": {"model": "grok-4.7-medium"},
 }
 OPUS_HIGH = {r: {"model": "claude-opus-5-5", "effort": "high"} for r in CLAUDE_ROLES}
 
@@ -55,12 +56,24 @@ BUILTIN: dict[str, dict[str, Any]] = {
                            "replace": ["models"],
                            "overlay": {"models": {"provider": "claude_code_native", "timeout_s": 900,
                                                   "roles": CLAUDE_ROLES}}},
-    "cursor_native": {"description": "implementer, tester and CI fixer as real cursor-agent sessions (Phase 1)",
+    "cursor_cli": {"description": "every role through cursor-agent -p (Grok 4.7) with tools emulated as JSON",
+                   "replace": ["models"],
+                   "overlay": {"models": {"provider": "cursor_cli", "timeout_s": 900, "roles": CURSOR_ROLES}}},
+    "cursor_native": {"description": "implementer, tester and CI fixer as real cursor-agent sessions on Grok 4.7 (Phase 1)",
                       "replace": ["models"],
                       "overlay": {"models": {"provider": "cursor_native", "timeout_s": 900, "roles": CURSOR_ROLES}}},
     "opus-high": {"description": "claude_code with every role on Opus at high effort",
                   "replace": ["models"],
                   "overlay": {"models": {"provider": "claude_code", "timeout_s": 900, "roles": OPUS_HIGH}}},
+    # Local models through Ollama, every role on one model, tools emulated as JSON.
+    "local_gemma": {"description": "every role on Gemma 4 E4B (local, Ollama) with tools emulated as JSON; thinks above low effort",
+                    "replace": ["models"],
+                    "overlay": {"models": {"provider": "ollama", "num_ctx": 32768,
+                                           "roles": {r: {**v, "model": "gemma4:e4b-it-qat"} for r, v in CLAUDE_ROLES.items()}}}},
+    "local_qwen": {"description": "every role on Qwen 3.5 9B (local, Ollama) with tools emulated as JSON",
+                   "replace": ["models"],
+                   "overlay": {"models": {"provider": "ollama", "num_ctx": 32768,
+                                          "roles": {r: {**v, "model": "qwen3.5:9b-mtp-q4_K_M"} for r, v in CLAUDE_ROLES.items()}}}},
     "interactive": {"description": "baseline: plain claude -p with default tools on the ticket text, no factory",
                     "kind": "interactive", "settings": {}},
 }
@@ -71,7 +84,7 @@ INTERACTIVE_TOOLS = ["Bash", "Read", "Edit", "MultiEdit", "Write", "Glob", "Grep
                      "Task", "NotebookEdit"]
 # Backend names for usage limits (asf/limits.py), as the scheduler names them.
 BACKEND_OF = {"claude_code": "claude", "claude_code_native": "claude", "cursor_cli": "cursor",
-              "cursor_native": "cursor"}
+              "cursor_native": "cursor", "ollama": "ollama"}
 
 
 @dataclass

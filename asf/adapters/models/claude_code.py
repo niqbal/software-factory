@@ -13,7 +13,7 @@ Settings (factory.yaml, under `models:`):
     timeout_s: 600               # per turn
     retries: 2                   # re-ask when the reply is not valid structured output
 
-Costs are Claude Code's own `total_cost_usd` per call (list price; on a subscription this
+Costs are Claude Code's own `total_cost_usd`, per call (see call_cost; list price; on a subscription this
 is not what is billed, but budgets still use it as the measure of work).
 """
 
@@ -26,6 +26,7 @@ import tempfile
 from typing import Any
 
 from ...util import find_cli
+from .prices import cost_of
 from ..base import AdapterContext, Conversation, ModelProvider, ModelTurn, ToolCall, ToolSpec
 
 TURN_SCHEMA = {
@@ -74,6 +75,28 @@ def _usage(d: dict[str, Any]) -> dict[str, int]:
             "cache_write": u.get("cache_creation_input_tokens", 0) or 0}
 
 
+# The last running total Claude Code reported for each session, to turn totals into call costs.
+_SESSION_TOTALS: dict[str, float] = {}
+
+
+def call_cost(d: dict[str, Any], model: str, resumed: bool) -> float:
+    """What one `claude -p` call cost. With --resume, `total_cost_usd` is the session's running
+    total, so a resumed call costs its growth over the last total seen for that session. A session
+    resumed from another process has no last total here; that call is priced from its own tokens
+    (Claude Code writes its cache at the 1-hour rate)."""
+    total = float(d.get("total_cost_usd") or 0)
+    sid = str(d.get("session_id") or "")
+    if not resumed:
+        cost = total
+    elif sid in _SESSION_TOTALS:
+        cost = max(0.0, total - _SESSION_TOTALS[sid])
+    else:
+        cost = cost_of(next(iter(d.get("modelUsage") or {}), model), _usage(d), hour_cache=True)
+    if sid:  # a fresh call starts the session's total over
+        _SESSION_TOTALS[sid] = max(_SESSION_TOTALS.get(sid, 0.0), total) if resumed else total
+    return cost
+
+
 class ClaudeCodeConversation(Conversation):
     def __init__(self, provider: "ClaudeCodeProvider", model: str, system: str,
                  tools: list[ToolSpec], effort: str):
@@ -101,8 +124,8 @@ class ClaudeCodeConversation(Conversation):
         for attempt in range(self.p.retries + 1):
             d = self.p.call(prompt, self.system, self.model, self.effort, TURN_SCHEMA,
                             resume=self.session, cwd=self.cwd)
+            cost += call_cost(d, self.model, resumed=self.session is not None)
             self.session = d.get("session_id") or self.session
-            cost += float(d.get("total_cost_usd") or 0)
             for k, v in _usage(d).items():
                 usage[k] += v
             out = d.get("structured_output")

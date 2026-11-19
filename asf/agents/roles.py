@@ -36,6 +36,11 @@ class PromptBuilder:
 
     def system(self, role: str, tier: int) -> str:
         test_rule = ("you may edit them at this tier." if policy.may_edit_existing_tests(self.cfg, tier)
+                     else "do not edit files that define tests; add new test files instead. Test support "
+                          "files that define no tests (in-memory fakes, helpers, fixtures) are different: when "
+                          "the code they stand in for changes, change them to match, or the tests keep checking "
+                          "a stale copy. Say in your summary which ones you changed and why."
+                          if self.cfg.get("permissions.implementer.may_edit_test_support", True)
                      else "do not edit them. Add new test files or new test cases in new files.")
         values = {**self.vars, "role": role, "role_title": TITLES[role], "test_edit_rule": test_rule,
                   "max_files": self.cfg.get("permissions.ci_fixer.max_files_touched", 5)}

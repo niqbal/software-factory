@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from ..util import git
+from . import check as check_mod
+from . import importer
 from . import mine as mine_mod
 from . import report as report_mod
 from . import runner, score, variants, workspace
@@ -36,6 +36,13 @@ def add_parser(sub: Any) -> None:
     m.add_argument("--fetch-issues", action="store_true", help="read referenced issues with the GitHub CLI")
     m.add_argument("--print", action="store_true", help="print the drafts; write nothing")
 
+    im = es.add_parser("import", parents=[common], help="draft cases from jobs the factory finished")
+    im.add_argument("--project", required=True, help="project key (e.g. workflow-engine-11bf9a) or repository path")
+    im.add_argument("--jobs", nargs="+", help="only these job ids (any state with a commit)")
+    im.add_argument("--state", action="append", help="job states to take (default: done)")
+    im.add_argument("--set", dest="set_name", help="set to draft into (default: the repository's name)")
+    im.add_argument("--print", action="store_true", help="print the drafts; write nothing")
+
     c = es.add_parser("check", parents=[common], help="run each case's hidden tests on base (should fail) and reference (should pass)")
     c.add_argument("--set", dest="set_name", required=True)
     c.add_argument("--cases", nargs="+")
@@ -53,6 +60,10 @@ def add_parser(sub: Any) -> None:
     r.add_argument("--keep", action="store_true", help="keep checkouts and state folders for inspection")
     r.add_argument("--run-id", help="name for this run (default: a timestamp)")
     r.add_argument("--report", action="store_true", help="print the set's report afterwards")
+    r.add_argument("--force", action="store_true", help="run cases whose check found problems")
+    r.add_argument("--settle", type=int, default=2, metavar="N",
+                   help="skip repeats after the first N once those agree on resolved (default 2; 0 runs every repeat)")
+    r.add_argument("--resume", action="store_true", help="keep finished runs in --run-id and do only the rest; a PAUSE file in the run folder holds back new runs")
 
     p = es.add_parser("report", parents=[common], help="per-variant tables; writes JSON and Markdown into the archive")
     p.add_argument("--set", dest="set_name", required=True)
@@ -62,6 +73,10 @@ def add_parser(sub: Any) -> None:
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-write", action="store_true", help="print only")
 
+    st = es.add_parser("site", parents=[common], help="build one HTML page over every run: live progress, comparisons, history, reports")
+    st.add_argument("--out", help="folder for index.html (default: <archive>/site)")
+    st.add_argument("--watch", type=int, metavar="SECONDS", help="rebuild every SECONDS until stopped")
+
     ls = es.add_parser("list", parents=[common], help="sets, cases and variants")
     ls.add_argument("--set", dest="set_name")
 
@@ -69,7 +84,7 @@ def add_parser(sub: Any) -> None:
 def handle(args: argparse.Namespace) -> int:
     root = evals_root(args.evals)
     try:
-        return {"mine": _mine, "check": _check, "run": _run, "report": _report, "list": _list}[args.eval_cmd](args, root)
+        return {"import": _import, "mine": _mine, "check": _check, "run": _run, "report": _report, "list": _list, "site": _site}[args.eval_cmd](args, root)
     except EvalError as e:
         print(f"eval: {e}", file=sys.stderr)
         return 2
@@ -106,50 +121,46 @@ def _mine(args: argparse.Namespace, root: Path) -> int:
     return 0
 
 
+def _import(args: argparse.Namespace, root: Path) -> int:
+    drafts = importer.import_jobs(args.project, args.jobs, tuple(args.state or ["done"]))
+    if args.print:
+        for d in drafts:
+            print("---\n" + dump_case(d))
+        print(f"# {len(drafts)} draft(s)", file=sys.stderr)
+        return 0
+    if not drafts:
+        print("no finished jobs with a commit in their repository")
+        return 0
+    repo = Path(drafts[0].repo)
+    guard_archive(root, [repo])
+    es = EvalSet(root, args.set_name or repo.name)
+    folder = es.dir / "drafts"
+    folder.mkdir(parents=True, exist_ok=True)
+    for d in drafts:
+        (folder / f"{d.id}.yaml").write_text(dump_case(d))
+        i = d.extra["imported"]
+        print(f"{d.id}: {i['diff']}; written by {i['implementer_backend']}, ${i['cost_usd']}, "
+              f"{i['fix_rounds']} fix round(s)" + (", revised" if i["revision_notes"] else ""))
+    print(f"{len(drafts)} draft(s) in {folder}")
+    return 0
+
+
 def _check(args: argparse.Namespace, root: Path) -> int:
     es = EvalSet(root, args.set_name)
     cases = es.cases(args.cases)
     guard_archive(root, [c.local_repo for c in cases if c.local_repo])
     bad = 0
-    out_dir = es.dir / "checks"
-    out_dir.mkdir(parents=True, exist_ok=True)
     for case in cases:
-        work = workspace.eval_home() / "work" / es.name / "check" / case.id
         try:
-            co, base = workspace.checkout(case, work / "repo")
-            m = workspace.mirror(case)
-            ref = workspace.resolve(m, case.reference)
-            raw, source = workspace.base_config(case, co)
-            cfg = workspace.eval_config(raw)
-            workspace.prepare(case, co, cfg.raw)
-            overlay, runnable = score.hidden_files(case, cfg, m, base, ref)
-            on_base, _ = score.score(case, cfg, co, base, "", m, ref)
-            ref_patch = git(m, "diff", "--binary", base, ref)
-            on_ref, log = score.score(case, cfg, co, base, ref_patch, m, ref)
+            c = check_mod.check_case(es, case)
         except EvalError as e:
             print(f"FAIL  {case.id}: {e}")
             bad += 1
             continue
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
-        problems = []
-        if not runnable:
-            problems.append("no runnable hidden tests")
-        if not on_ref.get("all_pass"):
-            problems.append(f"hidden tests fail on the reference ({on_ref.get('passed')}/{on_ref.get('total')})")
-        if on_base.get("all_pass"):
-            problems.append("hidden tests already pass on base: they do not test the change")
-        result = {"case": case.id, "checked": time.time(), "config": source, "hidden_tests": runnable,
-                  "overlay": overlay, "on_base": on_base, "on_reference": on_ref, "problems": problems}
-        (out_dir / f"{case.id}.json").write_text(json.dumps(result, indent=1))
-        if problems:
-            bad += 1
-            print(f"FAIL  {case.id}: {'; '.join(problems)}")
-            if not on_ref.get("all_pass"):
-                print("      " + log[-1500:].replace("\n", "\n      "))
-        else:
-            print(f"ok    {case.id}: {len(runnable)} hidden test file(s); base {on_base.get('passed')}/"
-                  f"{on_base.get('total')}, reference {on_ref.get('passed')}/{on_ref.get('total')}")
+        print(check_mod.summary(c))
+        if c["problems"] and c.get("reference_log_tail"):
+            print("      " + c["reference_log_tail"][-1500:].replace("\n", "\n      "))
+        bad += bool(c["problems"])
     return 1 if bad else 0
 
 
@@ -161,7 +172,7 @@ def _run(args: argparse.Namespace, root: Path) -> int:
     if args.repeat < 1 or args.jobs < 1:
         raise EvalError("--repeat and --jobs must be at least 1")
     opts = runner.Options(repeat=args.repeat, jobs=args.jobs, keep=args.keep, max_usd=args.max_usd,
-                          wait=not args.no_wait, run_id=args.run_id or "",
+                          wait=not args.no_wait, run_id=args.run_id or "", force=args.force, resume=args.resume, settle=args.settle,
                           echo=lambda msg: print(msg, flush=True))
     results = runner.run_set(es, vs, cases, opts)
     errors = [r for r in results if r.get("final_state") == "harness_error"]
@@ -188,6 +199,19 @@ def _report(args: argparse.Namespace, root: Path) -> int:
         js, md = report_mod.write(es, rep)
         print(f"wrote {js} and {md}", file=sys.stderr)
     return 0
+
+
+def _site(args: argparse.Namespace, root: Path) -> int:
+    import time
+
+    from . import site
+    out = Path(args.out).expanduser() if args.out else root / "site"
+    while True:
+        target = site.build(root, out)
+        if not args.watch:
+            print(target)
+            return 0
+        time.sleep(args.watch)
 
 
 def _list(args: argparse.Namespace, root: Path) -> int:

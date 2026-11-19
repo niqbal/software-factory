@@ -40,6 +40,7 @@ from ..projects import record
 from ..setup_wizard import code_root, first_item
 from ..store import Store
 from ..util import git, run
+from . import check as check_mod
 from . import score, workspace
 from .cases import Case, EvalError, EvalSet, guard_archive
 from .variants import INTERACTIVE_TOOLS, Variant
@@ -62,6 +63,12 @@ class Options:
     echo: Callable[[str], None] = print
     sleep: Callable[[float], None] = time.sleep
     spent: float = 0.0
+    force: bool = False
+    resume: bool = False
+    # Repeat k > settle is skipped when the first `settle` repeats of that case and variant in this
+    # run agree on resolved (all resolved or all not). 0 runs every repeat.
+    settle: int = 2
+    checks: dict[str, dict[str, Any]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -92,11 +99,41 @@ def run_set(evalset: EvalSet, variants: list[Variant], cases: list[Case], opts: 
             runnable.append(v)
     if not runnable:
         raise EvalError("no variant can run in this build of asf")
+    checks = {}
+    for c in cases:
+        found = check_mod.load_check(evalset, c)
+        if found is None:
+            opts.echo(f"checking {c.id} (hidden tests on base and reference)")
+            try:
+                found = check_mod.check_case(evalset, c, opts.echo)
+            except EvalError as e:
+                found = {"problems": [str(e)]}
+        if found["problems"] and not opts.force:
+            opts.echo(f"skip case {c.id}: {'; '.join(found['problems'])} (fix it, or pass --force)")
+            continue
+        checks[c.id] = found
+    cases = [c for c in cases if c.id in checks]
+    if not cases:
+        raise EvalError("no case passed its check")
+    opts.checks = checks
     run_dir.mkdir(parents=True, exist_ok=True)
+    if opts.resume:
+        # Finished runs are kept and their spend counts toward --max-usd.
+        opts.spent += sum(float(r.get("cost_usd") or 0) for r in _finished(run_dir))
     meta = {"run_id": opts.run_id, "set": evalset.name, "started": time.time(), "asf": code_version(),
             "variants": {v.name: {"kind": v.kind, "hash": v.hash, "source": v.source} for v in runnable},
-            "cases": [c.id for c in cases], "repeat": opts.repeat, "jobs": opts.jobs, "max_usd": opts.max_usd}
-    (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
+            "cases": [c.id for c in cases], "repeat": opts.repeat, "jobs": opts.jobs, "max_usd": opts.max_usd,
+            # What each variant is meant to run, so progress can be shown against it.
+            "plan": {v.name: {"cases": [c.id for c in cases], "repeat": opts.repeat} for v in runnable}}
+    meta_path = run_dir / "run.json"
+    if opts.resume and meta_path.exists():
+        prev = json.loads(meta_path.read_text())
+        meta["started"] = prev.get("started", meta["started"])
+        meta["variants"] = {**prev.get("variants", {}), **meta["variants"]}
+        meta["plan"] = {**prev.get("plan", {}), **meta["plan"]}
+        meta["cases"] = sorted(set(prev.get("cases", [])) | set(meta["cases"]))
+        meta["repeat"] = max(int(prev.get("repeat") or 1), opts.repeat)
+    meta_path.write_text(json.dumps(meta, indent=1))
     tasks = [(c, v, k) for k in range(1, opts.repeat + 1) for c in cases for v in runnable]
     opts.echo(f"eval run {opts.run_id}: {len(cases)} case(s) x {len(runnable)} variant(s) x {opts.repeat} "
               f"= {len(tasks)} run(s), {opts.jobs} at a time; results in {run_dir}")
@@ -115,6 +152,46 @@ def run_set(evalset: EvalSet, variants: list[Variant], cases: list[Case], opts: 
     return results
 
 
+def _finished(run_dir: Path) -> list[dict[str, Any]]:
+    out = []
+    for f in run_dir.glob("*/*/result.json"):
+        r = json.loads(f.read_text())
+        if r.get("finished") and not r.get("skipped") and not r.get("error"):
+            out.append(r)
+    return out
+
+
+def settled(variant_dir: Path, case_id: str, k: int, settle: int) -> str:
+    """Why repeat `k` need not run: the first `settle` repeats finished and agree. Empty when it must."""
+    if settle < 1 or k <= settle:
+        return ""
+    from .report import sample_values
+    outcomes = []
+    for i in range(1, settle + 1):
+        f = variant_dir / f"{case_id}-r{i}" / "result.json"
+        r = json.loads(f.read_text()) if f.exists() else {}
+        res = sample_values(r)["resolved"] if r.get("finished") and not r.get("skipped") and not r.get("error") else None
+        if res is None:
+            return ""
+        outcomes.append(res)
+    if len(set(outcomes)) != 1:
+        return ""
+    return f"settled: the first {settle} repeats were all {'resolved' if outcomes[0] else 'not resolved'}"
+
+
+def _wait_while_paused(run_dir: Path, tag: str, opts: Options, variant: Variant) -> None:
+    """A file named PAUSE in the run folder holds back new runs (runs already going finish);
+    PAUSE.<backend> (claude, cursor) holds back only the variants on that backend. Used to keep a
+    share of a backend's quota for other work: create it to pause, delete it to go on."""
+    names = ["PAUSE"] + [f"PAUSE.{b}" for b in variant.backends({})]
+    told = False
+    while any((run_dir / n).exists() for n in names):
+        if not told:
+            opts.echo(f"{tag} paused by a PAUSE file in {run_dir}")
+            told = True
+        opts.sleep(30)
+
+
 def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Options) -> dict[str, Any]:
     tag = f"[{variant.name} {case.id} r{k}]"
     lines: list[str] = []
@@ -128,7 +205,19 @@ def run_one(evalset: EvalSet, case: Case, variant: Variant, k: int, opts: Option
     work = workspace.eval_home() / "work" / evalset.name / opts.run_id / variant.name / f"{case.id}-r{k}"
     result: dict[str, Any] = {"case": case.id, "variant": variant.name, "kind": variant.kind, "repeat": k,
                               "run_id": opts.run_id, "set": evalset.name, "variant_hash": variant.hash,
+                              "tags": case.tags, "reference_by": case.reference_by,
                               "started": time.time()}
+    done = out_dir / "result.json"
+    if opts.resume and done.exists():
+        prev = json.loads(done.read_text())
+        if prev.get("finished") and not prev.get("skipped") and not prev.get("error"):
+            return prev
+    _wait_while_paused(evalset.runs_dir / opts.run_id, tag, opts, variant)
+    why = settled(evalset.runs_dir / opts.run_id / variant.name, case.id, k, opts.settle)
+    if why:
+        result.update(skipped=why, settled=True, finished=time.time())
+        echo(why)
+        return _save(out_dir, result, lines)
     with opts._lock:
         over = opts.max_usd is not None and opts.spent >= opts.max_usd
     if over:
@@ -180,7 +269,7 @@ def _setup(case: Case, variant: Variant | None, work: Path, out_dir: Path,
     echo(f"checkout {case.repo} at {case.base[:12]}")
     co, base = workspace.checkout(case, work / "repo")
     m = workspace.mirror(case)
-    ref = workspace.resolve(m, case.reference)
+    ref = workspace.reference_sha(case, m)
     raw, source = workspace.base_config(case, co)
     if variant is not None:
         why = variant.unavailable(raw)
@@ -195,12 +284,13 @@ def _setup(case: Case, variant: Variant | None, work: Path, out_dir: Path,
 
 
 def _score(case: Case, cfg: Config, co: Path, base: str, patch: str, m: Path, ref: str, out_dir: Path,
-           echo: Callable[[str], None]) -> dict[str, Any]:
+           echo: Callable[[str], None], check: dict[str, Any] | None = None) -> dict[str, Any]:
     (out_dir / "candidate.diff").write_text(patch)
     ref_patch = git(m, "diff", "--binary", base, ref)
     diff = score.compare(score.numstat(patch, cfg), score.numstat(ref_patch, cfg))
     echo("scoring against the hidden tests")
     hidden, log = score.score(case, cfg, co, base, patch, m, ref)
+    hidden = score.against_check(hidden, check)
     (out_dir / "hidden.log").write_text(log)
     return {"hidden": hidden, "diff": diff, "base_sha": base, "reference_sha": ref}
 
@@ -217,8 +307,10 @@ def _wait_for_backends(backends: list[str], opts: Options, echo: Callable[[str],
             raise LimitStop(f"usage limit on {', '.join(backends)} until {lift:%H:%M}")
         secs = max(30.0, (lift - datetime.now().astimezone()).total_seconds())
         echo(f"usage limit on {', '.join(backends)}; waiting until {lift:%H:%M}")
+        t0 = time.time()
         opts.sleep(min(secs, 600))
-        waited += min(secs, 600)
+        # The wall clock, not the requested sleep: a machine that sleeps meanwhile waits longer.
+        waited += max(time.time() - t0, min(secs, 600))
 
 
 # ----------------------------------------------------------------------------- factory variants
@@ -269,9 +361,12 @@ def _factory(case: Case, variant: Variant, work: Path, out_dir: Path, opts: Opti
     if report and Path(report).exists():
         shutil.copy(report, out_dir / "report.md")
     patch = _candidate_patch(f, store.job(job_id), co, base, cfg, metrics)
-    out = {**metrics, "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
+    # Cursor reports tokens, not dollars: its costs are usd_per_mtok estimates.
+    estimated = "cursor" in variant.backends(cfg.raw)
+    out = {**metrics, "cost_estimated": estimated, "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1), "wait_clock": "wall",
            "limit_hits": limit_hits, "config_hash": cfg.version_hash}
-    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo))
+    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo,
+                      opts.checks.get(case.id)))
     return out
 
 
@@ -355,9 +450,10 @@ def _interactive(case: Case, variant: Variant, work: Path, out_dir: Path, opts: 
            "visible_pass": visible, "gates": gates, "gates_first_try": visible if gates else None,
            "fix_rounds": 0, "rounds": {}, "review_blocking": 0, "denials": denials, "cost_usd": round(cost, 4),
            "turns": turns, "auto_retries": 0, "stop_reason": outcome if final != "finished" else "",
-           "summary": outcome[:2000], "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1),
+           "summary": outcome[:2000], "minutes": round(minutes, 2), "waited_minutes": round(waited / 60, 1), "wait_clock": "wall",
            "limit_hits": limit_hits, "config_hash": cfg.version_hash}
-    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo))
+    out.update(_score(case, cfg, co, base, patch, m, ref, out_dir, echo,
+                      opts.checks.get(case.id)))
     return out
 
 

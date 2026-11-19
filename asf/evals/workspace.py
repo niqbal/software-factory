@@ -9,7 +9,9 @@ has no remote: nothing an eval does can be pushed.
 
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -63,10 +65,12 @@ def mirror(case: Case) -> Path:
                 raise EvalError(f"cannot clone {src}: {res.tail(800)}")
             git(tmp, "config", "uploadpack.allowAnySHA1InWant", "true")
             tmp.rename(dest)
-        missing = [c for c in (case.base, case.reference) if not has_commit(dest, c)]
+        wanted = [c for c in (case.base, case.reference) if c]
+        missing = [c for c in wanted if not has_commit(dest, c)]
         if missing:
-            git(dest, "fetch", "-q", "--prune", "origin", timeout=1800, check=False)
-            missing = [c for c in (case.base, case.reference) if not has_commit(dest, c)]
+            git(dest, "fetch", "-q", "origin", "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*",
+                timeout=1800, check=False)
+            missing = [c for c in wanted if not has_commit(dest, c)]
         if missing:
             raise EvalError(f"case {case.id}: commit(s) {', '.join(missing)} not found in {src}")
     return dest
@@ -78,6 +82,41 @@ def has_commit(repo: Path, ref: str) -> bool:
 
 def resolve(repo: Path, ref: str) -> str:
     return git(repo, "rev-parse", f"{ref}^{{commit}}").strip()
+
+
+def reference_sha(case: Case, m: Path) -> str:
+    """The reference commit. A `reference_patch` becomes a commit on the base in the eval mirror
+    (refs/asf-eval/...), never in the product repository."""
+    patch_file = case.reference_patch_file
+    if patch_file is None:
+        return resolve(m, case.reference)
+    if not patch_file.exists():
+        raise EvalError(f"case {case.id}: reference_patch {patch_file} does not exist")
+    patch = patch_file.read_bytes()
+    base = resolve(m, case.base)
+    ref = f"refs/asf-eval/{case.id}-{sha(base + patch.decode(errors='replace'), 10)}"
+    with _lock(str(m)):
+        got = run(["git", "-C", str(m), "rev-parse", "-q", "--verify", ref], shell=False)
+        if got.ok:
+            return got.stdout.strip()
+        tmp = eval_home() / "tmp" / f"ref-{case.id}-{sha(ref, 6)}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        git(m, "worktree", "add", "-q", "--detach", str(tmp), base)
+        try:
+            p = subprocess.run(["git", "-C", str(tmp), "apply", "--binary", "--index", "-"], input=patch,
+                               capture_output=True)
+            if p.returncode != 0:
+                raise EvalError(f"case {case.id}: reference_patch does not apply on {base[:12]}: "
+                                f"{p.stderr.decode(errors='replace')[:800]}")
+            env = {**os.environ, **AUTHOR_ENV}
+            subprocess.run(["git", "-C", str(tmp), "commit", "-q", "--no-verify", "-m",
+                            f"eval reference for {case.id}"], check=True, capture_output=True, env=env)
+            new = git(tmp, "rev-parse", "HEAD").strip()
+            git(m, "update-ref", ref, new)
+            return new
+        finally:
+            git(m, "worktree", "remove", "--force", str(tmp), check=False)
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def checkout(case: Case, dest: Path) -> tuple[Path, str]:

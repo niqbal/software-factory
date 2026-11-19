@@ -188,6 +188,13 @@ queued -> triaged -> [reproducing] -> implementing -> testing -> verifying -> [c
   -> done     (shipped: merged, verified, deployed, post-deploy gate held; the only output)
 ```
 
+**Triage asks only what the requester must decide.** Where an item leaves something open that
+an engineer would settle by judgement, triage records an assumption ("Assumed: ...") and the
+job goes on: the implementer, tester and reviewer follow it, and the delivery report lists it
+under **Assumptions** for the owner to correct with a revision. A job stops with "clarification
+needed" only for product or policy decisions where a wrong guess is costly to undo, never for
+what the code can answer.
+
 The factory notices a merge however it was made, and a deleted branch counts as abandoned.
 `asf report` (and the console) count only shipped work: cost per shipped job is all spend
 divided by shipped jobs, abandoned spend is reported as waste, and lead time is split into
@@ -309,8 +316,8 @@ This is Phase 0 of [docs/PARITY.md](docs/PARITY.md).
   **hidden tests**: the factory's checkout holds only the history up to the base commit, so
   neither it nor the baseline can find them.
 - **A variant** is a named overlay on the case's `factory.yaml`: `current` (unchanged),
-  `claude_code`, `opus-high`, `claude_code_native` and `cursor_native` (these two load once the
-  native providers are in the build), or your own file in the archive's `variants/` folder.
+  `claude_code`, `claude_code_native`, `cursor_cli`, `cursor_native` (Grok 4.7), `opus-high`, or
+  your own file in the archive's `variants/` folder.
   `interactive` is the baseline: plain `claude -p` with its default tools in the checkout, given
   the ticket text and nothing else.
 - **A run** clones the case at its base commit, registers a throwaway project with the variant's
@@ -323,30 +330,70 @@ Cases and results live only in the private runs archive (default `~/work/asf-run
 refuses an archive inside either.
 
 ```bash
-asf eval mine --repo ~/work/myapp --since 2026-01-01   # draft cases into sets/myapp/drafts/
-# rewrite each kept draft's ticket as its requester would have, move it to sets/myapp/cases/
-asf eval check --set myapp                             # hidden tests fail on base, pass on reference
-asf eval run --set myapp --config interactive --config claude_code --repeat 2
+asf eval import --project myapp-1a2b3c                 # draft cases from the factory's done jobs
+asf eval mine --repo ~/work/myapp --since 2026-01-01   # draft cases from history
+# review each draft, move it to sets/<set>/cases/
+asf eval check --set myapp                             # sort hidden tests: fail-to-pass, pass-to-pass, flaky
+asf eval run --set myapp --config interactive --config claude_code --config claude_code_native --repeat 2
 asf eval report --set myapp                            # tables, plus reports/latest.{md,json}
 ```
 
-`mine` keeps first-parent commits and merged pull requests that touch both code and tests,
-change under 400 lines, and reference an issue or have a descriptive message. Its tickets are
-drafted from the commit message (or the issue, with `--fetch-issues`) and marked
-`review: needed`: a commit message describes the solution, not the request, so a person
-rewrites each one before it counts.
+Cases come from three places. `import` turns jobs the factory finished into cases: the work item
+exactly as its requester wrote it, the job's base commit, and the final commit you merged (after
+any revisions), noting which backend wrote it. `mine` keeps first-parent commits and merged pull
+requests that touch code and a runnable test, change under 400 lines, and reference an issue or
+have a descriptive message; its tickets come from commit messages and need rewriting. And a case
+can be authored: its own hidden tests (`hidden_dir`), its own reference (`reference_patch`, made a
+commit in the eval mirror only), and `needs_app: true` when the hidden tests are browser tests run
+against `app.start`.
+
+Scoring is per test. `check` runs the hidden tests once on the base commit and twice on the
+reference: tests that fail on base and pass on the reference are fail-to-pass (what the ticket
+asks for), tests passing on both are pass-to-pass (must not break), and tests that change result
+between the two reference runs are flaky and left out. A run resolves the case when every
+fail-to-pass test passes and no pass-to-pass test breaks. pytest, go test, vitest, jest and
+`node --test` results are read per test. When hidden tests fail because a name they use does not
+exist in the candidate (a Go `undefined:`, an `ImportError`, a missing TypeScript export), the run
+is counted as an interface mismatch and left out of the quality numbers rather than scored as a
+wrong fix: name that interface in the case's acceptance criteria.
 
 Each run records the final state, visible pass (the factory's own gates; for the baseline, the
-same gates run on what it left), hidden pass rate, diff size and files against the reference,
+same gates run on what it left), the hidden result, diff size and files against the reference,
 dollars, minutes, gates passing on the first try, fix rounds and policy denials. The report shows
 per-variant means over cases with the number of cases behind each, the **visible-versus-hidden
-gap** (passes its own checks, fails the hidden tests: the reward-hacking signal), and
-differences against a baseline variant paired by case, each marked `likely real`,
-`within noise` (under two standard errors) or `too few cases`.
+gap** (passes its own checks, fails the hidden tests: the reward-hacking signal), resolved rate by
+case tag and by who wrote the reference, and differences against a baseline variant paired by
+case, each marked `likely real`, `within noise` (under two standard errors) or `too few cases`.
+Cursor variants run Grok 4.7; Cursor reports tokens rather than dollars, so its costs are
+estimates (`usd_per_mtok`) and the report says so.
 
 `run` options: `--cases ID ...`, `--repeat K`, `--jobs N` (parallel runs; one at a time by
 default), `--max-usd` (stop starting runs past this spend), `--no-wait` (skip instead of waiting
-out a usage limit), `--keep` (keep checkouts under `$ASF_HOME/evals/work`). Per-job budgets are
+out a usage limit), `--keep` (keep checkouts under `$ASF_HOME/evals/work`), `--settle N` (stop
+repeating a case once its first N runs agree; default 2, 0 runs every repeat), `--run-id` with
+`--resume` (keep the run's finished results, whose spend counts toward `--max-usd`, and do only
+the rest). To hold back new runs without killing any, create `PAUSE` in the run folder, or
+`PAUSE.claude` / `PAUSE.cursor` to hold back only that backend's variants; delete it to go on.
+Waits for a usage limit are timed by the wall clock and left out of the run's minutes.
+`ASF_EVAL_PATH_MAP=/old/prefix=/new/prefix` rewrites case repository paths, so one archive serves
+several machines. `asf eval site [--watch SECONDS]` builds one page over every run in the archive
+(live progress, comparisons, history, each case in full); serve its folder with any static server.
+The local variants `local_gemma` and `local_qwen` run every role on a model served by Ollama
+(`models.provider: ollama`, see `asf/adapters/models/ollama.py`).
+
+What the evals have shown so far (set v1, 12 cases, run `improved-r2`, 2026-11-19):
+
+- `claude_code_native` resolves as many cases as interactive Claude Code (83%), and leaves the
+  project's own checks green 92% of the time against interactive's 29%. It is the Claude
+  backend in this repository's `factory.yaml`.
+- The factory costs about twice an interactive session ($1.41 against $0.69 a run) and takes
+  about three times as long (9 minutes against 3). The implementer alone costs what interactive
+  does; the rest is the tester, reviewer, security pass and gates.
+- Cursor on Grok 4.7 is as accurate (67-72%, within noise) and about 5x slower.
+- A 4B local model on an 8 GB machine completes the pipeline but resolves nothing.
+- Changes measured as helping: triage records assumptions instead of asking; tests' support files
+  may change. Six of the 12 cases are solved by every variant, so separating the variants
+  further needs harder cases. Per-job budgets are
 the variant's own; usage limits are shared with the scheduler (`asf/limits.py`). A case can set
 `test_command`, `setup` commands, `deps_from` (where `execution.clone_dirs` such as `.venv` are
 cloned from) and its own `config`; see `asf/evals/cases.py` for the format and
@@ -377,7 +424,7 @@ cloned from) and its own `config`; see `asf/evals/cases.py` for the format and
 | `serve [--worker]` | Webhook gateway with signature verification, job API, optional worker loop. |
 | `ci-workflow [--write]` | GitHub Actions workflow for runner mode. |
 | `adapters` | Lists installed adapters, including third-party ones registered by entry point. |
-| `eval mine \| check \| run \| report \| list` | The eval harness (see above): draft cases from history, validate their hidden tests, run variants, compare them. |
+| `eval import \| mine \| check \| run \| report \| list` | The eval harness (see above): draft cases from done jobs or history, sort their hidden tests, run variants, compare them. |
 
 Global flags: `--repo`, `--config`, `--state`, `--env-file`, and `--set key=value` to
 override any config value (CI uses this to switch delivery to GitHub).
@@ -429,7 +476,11 @@ new adapter and a line in `factory.yaml`.
 - Commands run with a scrubbed environment: no API keys, tokens or cloud credentials are
   inherited. Secret-looking files cannot be read, and tool output is redacted.
 - `factory.yaml`, CI config and secret files are protected paths. Existing tests cannot be
-  edited or deleted above tier 0, and the tester role can write only test files.
+  edited or deleted above tier 0, and the tester role can write only test files. "Tests" here
+  means files that define tests (by name, or by containing `def test_`, `test(`, `func Test`...).
+  Test support under the test folders that defines none (in-memory fakes, helpers, fixtures)
+  may change with the code it stands in for; `test_integrity` names such changes for the
+  reviewer. `permissions.implementer.may_edit_test_support: false` freezes them too.
 - The local worktree sandbox does not block network access, and tests execute code the
   agent wrote. Use the Docker provider or a CI runner where that matters.
 

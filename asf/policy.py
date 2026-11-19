@@ -6,6 +6,7 @@ so it is unit-testable and identical wherever the factory runs.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .config import Config
@@ -104,6 +105,38 @@ def decide(cfg: Config, tier: int, manual_checks: list[str] | None = None) -> De
 
 def may_edit_existing_tests(cfg: Config, tier: int) -> bool:
     return tier <= cfg.get("permissions.implementer.may_edit_existing_tests_up_to_tier", 0)
+
+
+TEST_FILE_NAME = ("**/*.test.*", "**/*.spec.*", "**/test_*.py", "test_*.py", "**/*_test.py", "*_test.py",
+                  "**/*_test.go", "*_test.go", "**/*Test.java", "**/*Tests.java", "**/*_spec.rb")
+TEST_DEFINITION = re.compile(
+    r"^\s*(async\s+)?def\s+test_\w*\s*\("          # pytest
+    r"|^\s*class\s+Test\w*\b"                       # pytest / unittest classes
+    r"|^\s*func\s+(Test|Benchmark|Fuzz)\w*\s*\("     # go
+    r"|^\s*(describe|it|test)(\.\w+)*\s*\("          # jest, vitest, mocha, node:test
+    r"|@Test\b",                                      # junit
+    re.M)
+
+
+def defines_tests(path: str, text: str | None) -> bool:
+    """Whether a file under the test globs holds test cases (as opposed to helpers, fakes and
+    fixtures the tests use)."""
+    return any_match(path, list(TEST_FILE_NAME)) or bool(text and TEST_DEFINITION.search(text))
+
+
+def frozen_test(cfg: Config, tier: int, path: str, base_text: str | None) -> bool:
+    """An existing file the agents may not edit at this tier because it holds tests.
+
+    Existing test cases are frozen above tier 0 so a change cannot pass by weakening the checks.
+    Test support files (in-memory fakes, helpers, fixtures) are not: when the code they stand in
+    for changes, they must change with it, or the tests check a stale copy. Edits to them are
+    allowed (`permissions.implementer.may_edit_test_support`, default on) and flagged for review.
+    """
+    if base_text is None or not cfg.is_test_path(path) or may_edit_existing_tests(cfg, tier):
+        return False
+    if defines_tests(path, base_text):
+        return True
+    return not cfg.get("permissions.implementer.may_edit_test_support", True)
 
 
 def new_dependencies_allowed(cfg: Config, tier: int) -> bool:

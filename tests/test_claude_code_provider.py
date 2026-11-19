@@ -116,3 +116,31 @@ def test_structured_and_credentials(fake, tmp_path):
     assert "--no-session-persistence" in calls()[-1]["args"]
     assert p.credentials_problem() is None
     assert ClaudeCodeProvider({"binary": str(tmp_path / "missing")}).credentials_problem()
+
+
+def test_a_resumed_turn_costs_only_what_the_session_total_grew_by(fake):
+    # `claude -p --resume` reports the whole session's running total; adding those up overcounts.
+    setup, _ = fake
+    p = setup([reply([{"name": "read_file", "input": {"path": "a"}}], cost=0.01),
+               reply([{"name": "read_file", "input": {"path": "b"}}], cost=0.03),
+               reply([{"name": "finish", "input": {}}], cost=0.035)])
+    conv = p.conversation("claude-sonnet-5-5", "SYSTEM", TOOLS, "high")
+    conv.add_user("go")
+    costs = []
+    for _ in range(3):
+        t = conv.step()
+        costs.append(t.cost_usd)
+        conv.add_tool_results([(c.id, "x", False) for c in t.tool_calls])
+    assert costs == pytest.approx([0.01, 0.02, 0.005]) and sum(costs) == pytest.approx(0.035)
+
+
+def test_call_cost_of_a_session_resumed_in_another_process_comes_from_its_tokens():
+    from asf.adapters.models.claude_code import call_cost
+    fresh = {"session_id": "X1", "total_cost_usd": 0.5}
+    assert call_cost(fresh, "claude-opus-5-5", resumed=False) == 0.5
+    assert call_cost({"session_id": "X1", "total_cost_usd": 0.8}, "claude-opus-5-5", resumed=True) == pytest.approx(0.3)
+    # Unknown session: its running total says nothing about this call, so price the call's tokens
+    # (Opus: $4/M in, $20/M out, cache writes at the 1-hour rate of $8/M).
+    d = {"session_id": "X2", "total_cost_usd": 9.0,
+         "usage": {"input_tokens": 1000, "output_tokens": 1000, "cache_creation_input_tokens": 1000}}
+    assert call_cost(d, "claude-opus-5-5", resumed=True) == pytest.approx((4 + 20 + 8) / 1000)

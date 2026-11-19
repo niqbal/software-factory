@@ -13,28 +13,15 @@ from typing import Any
 
 import anthropic
 
+from .prices import PRICES, cost_of  # noqa: F401 - PRICES re-exported
 from ..base import AdapterContext, Conversation, ModelProvider, ModelTurn, ToolCall, ToolSpec
 
-# $ per million tokens: input, output, cache read, cache write (5 minute TTL = 1.25x input)
-PRICES = {
-    "claude-fable-5-1": (10.0, 50.0, 0.25, 12.5),
-    "claude-opus-5-5": (4.0, 20.0, 0.20, 5.0),
-    "claude-opus-5": (5.0, 25.0, 0.50, 6.25),
-    "claude-sonnet-5-5": (2.0, 10.0, 0.20, 2.5),
-    "claude-haiku-5-5": (0.10, 0.50, 0.01, 0.125),
-}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 
 
 class ModelRefused(RuntimeError):
     pass
-
-
-def cost_of(model: str, usage: dict[str, int]) -> float:
-    pin, pout, pread, pwrite = PRICES.get(model, PRICES["claude-opus-5-5"])
-    return (usage.get("input", 0) * pin + usage.get("output", 0) * pout
-            + usage.get("cache_read", 0) * pread + usage.get("cache_write", 0) * pwrite) / 1_000_000
 
 
 def _usage(u: Any) -> dict[str, int]:

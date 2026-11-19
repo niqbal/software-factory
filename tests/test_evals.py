@@ -169,9 +169,12 @@ def test_hidden_tests_fail_on_base_and_pass_on_reference(home, archive, capsys):
     rc = cli.main(["eval", "--evals", str(archive), "check", "--set", "demo"])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert "ok    invoice-discount-rounding: 1 hidden test file(s); base 1/3, reference 3/3" in out
+    assert "ok    invoice-discount-rounding: 1 hidden test file(s); 2 fail-to-pass, 1 pass-to-pass" in out
     check = json.loads((archive / "sets" / "demo" / "checks" / "invoice-discount-rounding.json").read_text())
     assert check["hidden_tests"] == ["tests/test_discount.py"] and not check["problems"]
+    assert check["fail_to_pass"] == ["tests/test_discount.py::test_half_cent_rounds_up",
+                                     "tests/test_discount.py::test_one_cent_half_off"]
+    assert check["pass_to_pass"] == ["tests/test_discount.py::test_whole"] and check["flaky"] == []
 
 
 def test_parse_counts():
@@ -231,9 +234,11 @@ def test_run_and_report_end_to_end(home, archive, product, capsys):
         assert r["final_state"] == "awaiting_review" and r["delivered"] and r["visible_pass"]
         assert r["gates_first_try"] is True and r["fix_rounds"] == 0 and r["cost_usd"] > 0
         assert r["diff"]["code_files"] == ["invoice/totals.py"] and r["diff"]["ref_files_touched"] == 1.0
-    assert good["hidden"]["all_pass"] and good["hidden"]["passed"] == 3
+    assert good["hidden"]["all_pass"] and good["hidden"]["scored"] == "per test"
+    assert (good["hidden"]["fixed"], good["hidden"]["fail_to_pass"], good["hidden"]["broken"]) == (2, 2, [])
     # The gaming fix passes its own test and every gate, but not the hidden tests: the gap signal.
-    assert not gaming["hidden"]["all_pass"] and gaming["hidden"]["passed"] == 2
+    assert not gaming["hidden"]["all_pass"] and gaming["hidden"]["fixed"] == 1
+    assert gaming["hidden"]["not_fixed"] == ["tests/test_discount.py::test_one_cent_half_off"]
     run_dir = archive / "sets/demo/runs/r1/good/invoice-discount-rounding-r1"
     assert "Round discounts" in (run_dir / "report.md").read_text()
     assert (run_dir / "candidate.diff").read_text().count("apply_discount") >= 1
@@ -274,7 +279,7 @@ def test_interactive_baseline_that_changes_nothing(home, archive, tmp_path):
     es = EvalSet(archive, "demo")
     [r] = runner.run_set(es, [v], es.cases(), runner.Options(run_id="b2", echo=lambda m: None))
     assert r["final_state"] == "no_changes" and not r["delivered"] and not r["visible_pass"]
-    assert r["hidden"]["passed"] == 1 and not r["hidden"]["all_pass"]
+    assert r["hidden"]["fixed"] == 0 and not r["hidden"]["all_pass"]
 
 
 def test_usage_limit_skips_without_waiting_and_budget_cap(home, archive, tmp_path):
@@ -390,3 +395,135 @@ def test_report_pairs_by_case_and_flags_noise():
 def test_mine_strips_closing_git_trailers_only():
     body = "Details here.\n\nNote: this paragraph stays.\n\nCo-Authored-By: x <x@y>\nReplit-Commit-Author: Agent"
     assert mine_mod.strip_trailers(body) == "Details here.\n\nNote: this paragraph stays."
+
+
+def test_test_ids_and_classify():
+    py = "PASSED tests/t.py::test_a\nFAILED tests/t.py::test_b - assert 1 == 2\nERROR tests/u.py - ImportError\n"
+    assert score.test_ids(py, "tests/t.py") == {"tests/t.py::test_a": True, "tests/t.py::test_b": False,
+                                                "tests/u.py": False}
+    go = "=== RUN TestA\n--- PASS: TestA (0.00s)\n    --- FAIL: TestA/sub (0.00s)\n"
+    assert score.test_ids(go, "pkg/a_test.go") == {"pkg/a_test.go::TestA": True, "pkg/a_test.go::TestA/sub": False}
+    js = " ✓ src/a.test.ts > adds 2ms\n × src/a.test.ts > subtracts 3ms\n"
+    assert score.test_ids(js, "src/a.test.ts") == {"src/a.test.ts::src/a.test.ts > adds": True,
+                                                   "src/a.test.ts::src/a.test.ts > subtracts": False}
+    assert score.verbose("go test -race ./x") == "go test -v -race ./x"
+    assert score.verbose("python -m pytest -q x.py") == "python -m pytest -q x.py -rA"
+    got = score.classify({"a": False, "b": True, "c": True},
+                         [{"a": True, "b": True, "c": True, "d": False, "e": True},
+                          {"a": True, "b": True, "c": False, "d": False, "e": True}])
+    assert got == {"fail_to_pass": ["a", "e"], "pass_to_pass": ["b"], "fails_on_reference": ["d"], "flaky": ["c"]}
+
+
+def test_authored_case_with_reference_patch_and_hidden_dir(home, archive, product, tmp_path, capsys):
+    """A case written for the eval: its own reference (a patch) and its own hidden tests, aimed at an
+    edge the original tests missed. The product repository never sees either."""
+    repo, base, _ = product
+    folder = archive / "sets" / "demo" / "cases" / "authored"
+    (folder / "hidden" / "tests").mkdir(parents=True)
+    (folder / "hidden" / "tests" / "test_edges.py").write_text(
+        "from invoice.totals import apply_discount\n\n\ndef test_negative_percent_rejected():\n"
+        "    import pytest\n    with pytest.raises(ValueError):\n        apply_discount(100, -5)\n\n\n"
+        "def test_plain():\n    assert apply_discount(1000, 10) == 900\n")
+    (folder / "ref.diff").write_text(
+        "--- a/invoice/totals.py\n+++ b/invoice/totals.py\n@@ -8,2 +8,4 @@ def apply_discount(cents, percent):\n"
+        "     # BUG: truncates instead of rounding half up\n+    if percent < 0:\n+        raise ValueError(percent)\n"
+        "     return int(cents * (100 - percent) / 100)\n")
+    case = {"id": "authored-negative", "repo": str(repo), "base": base, "reference_patch": "authored/ref.diff",
+            "hidden_dir": "authored/hidden", "tags": ["authored", "edge-case"], "reference_by": "human",
+            "ticket": {"title": "Negative discounts add money", "body": "apply_discount(100, -5) returns 105.",
+                       "kind": "bug"},
+            "config": yaml.safe_load(invoice_config())}
+    (archive / "sets" / "demo" / "cases" / "authored-negative.yaml").write_text(yaml.safe_dump(case))
+    assert cli.main(["eval", "--evals", str(archive), "check", "--set", "demo", "--cases", "authored-negative"]) == 0
+    assert "1 fail-to-pass, 1 pass-to-pass" in capsys.readouterr().out
+    assert sh(repo, "git", "for-each-ref", "refs/asf-eval").strip() == ""  # made in the eval mirror only
+    binary = fake_claude(tmp_path, FIX)
+    v = variants.Variant("interactive", kind="interactive", settings={"binary": str(binary)})
+    es = EvalSet(archive, "demo")
+    [r] = runner.run_set(es, [v], es.cases(["authored-negative"]), runner.Options(run_id="a1", echo=lambda m: None))
+    # The rounding fix does nothing for negative percents: the authored edge test catches it.
+    assert r["hidden"]["scored"] == "per test" and r["hidden"]["fixed"] == 0 and r["tags"] == ["authored", "edge-case"]
+    rep = report_mod.summarize(report_mod.load_results(es))
+    assert rep["by_tag"]["edge-case"]["interactive"]["mean"] == 0.0 and "by:human" in rep["by_tag"]
+
+
+def test_cursor_variants_run_grok():
+    vs = variants.available(Path("/nonexistent"))
+    for name in ("cursor_cli", "cursor_native"):
+        roles = vs[name].apply({})["models"]["roles"]
+        assert {r["model"] for r in roles.values()} <= {"grok-4.7-low", "grok-4.7-medium", "grok-4.7-high"}
+        assert roles["implementer"]["model"] == "grok-4.7-high"
+        assert vs[name].backends({}) == ["cursor"]
+
+
+def test_interface_mismatch_is_detected_and_left_out_of_quality_numbers():
+    log = "./tok_test.go:12:5: undefined: encodeToken\nE   ImportError: cannot import name '_real_question'"
+    assert score.interface_mismatch(log) == ["encodeToken", "_real_question"]
+    ok = _result("v", "c1", 1)
+    mismatched = _result("v", "c2", 1, hidden=(0, 3))
+    mismatched["hidden"]["interface_mismatch"] = ["encodeToken"]
+    rep = report_mod.summarize([ok, mismatched])
+    s = rep["variants"]["v"]
+    assert s["interface_mismatch"] == 1 and s["metrics"]["resolved"]["n"] == 1
+    assert s["metrics"]["resolved"]["mean"] == 1.0 and s["metrics"]["cost_usd"]["n"] == 2
+    assert any("different interface" in f for f in rep["flags"])
+
+
+def test_resume_keeps_finished_runs_counts_their_spend_and_honours_pause(home, archive, tmp_path):
+    binary = fake_claude(tmp_path, FIX)
+    v = variants.Variant("interactive", kind="interactive", settings={"binary": str(binary)})
+    es = EvalSet(archive, "demo")
+    [first] = runner.run_set(es, [v], es.cases(), runner.Options(run_id="rs", echo=lambda m: None))
+    (tmp_path / "prompt-received.txt").unlink()
+    pause = es.runs_dir / "rs" / "PAUSE"
+    pause.write_text("")
+    slept: list[float] = []
+    opts = runner.Options(run_id="rs", repeat=2, resume=True, max_usd=10, echo=lambda m: None,
+                          sleep=lambda s: (slept.append(s), pause.unlink()))
+    results = runner.run_set(es, [v], es.cases(), opts)
+    assert results[0]["started"] == first["started"]  # kept, not run again
+    assert results[1]["repeat"] == 2 and results[1]["final_state"] == "finished"
+    assert slept == [30]  # repeat 2 waited for the PAUSE file to go
+    assert opts.spent == 0.84  # the kept run's spend counts toward --max-usd
+
+
+def test_a_repeat_is_skipped_once_the_first_ones_agree(tmp_path):
+    from asf.evals.runner import settled
+
+    def put(case, k, resolved=True, **extra):
+        d = tmp_path / f"{case}-r{k}"
+        d.mkdir()
+        r = {"finished": 1.0, "delivered": True, **extra,
+             "hidden": {"rate": 1.0 if resolved else 0.0, "all_pass": resolved}}
+        (d / "result.json").write_text(json.dumps(r))
+
+    put("same", 1), put("same", 2)
+    put("fail", 1, resolved=False), put("fail", 2, resolved=False)
+    put("mixed", 1), put("mixed", 2, resolved=False)
+    put("errored", 1), put("errored", 2, error="ETIMEDOUT")
+    put("pending", 1)
+    assert settled(tmp_path, "same", 3, 2).startswith("settled: the first 2 repeats were all resolved")
+    assert "not resolved" in settled(tmp_path, "fail", 3, 2)
+    assert settled(tmp_path, "mixed", 3, 2) == ""      # they disagree: the third run decides
+    assert settled(tmp_path, "errored", 3, 2) == ""    # an infra error is not an answer
+    assert settled(tmp_path, "pending", 3, 2) == ""    # the second is not finished yet
+    assert settled(tmp_path, "same", 2, 2) == "" and settled(tmp_path, "same", 3, 0) == ""
+
+
+def test_report_reprices_inflated_claude_calls_and_drops_minutes_of_limited_runs(tmp_path):
+    # Before the fix a resumed session charged its running total; the tokens were right.
+    rows = [{"model": "claude-opus-5-5", "input_tokens": 0, "output_tokens": 1000, "cache_read": 0,
+             "cache_write": 0, "cost_usd": 5.0},                       # inflated: fair price $0.02
+            {"model": "claude-opus-5-5", "input_tokens": 0, "output_tokens": 1000, "cache_read": 0,
+             "cache_write": 0, "cost_usd": 0.02},                      # already right
+            {"model": "grok-4.7", "input_tokens": 0, "output_tokens": 1000, "cost_usd": 0.0}]
+    (tmp_path / "runs.json").write_text(json.dumps(rows))
+    r = report_mod.corrected({"cost_usd": 5.02, "minutes": 9.0}, tmp_path)
+    assert r["cost_usd"] == pytest.approx(0.04) and r["cost_usd_recorded"] == 5.02 and r["cost_corrected"]
+    rows[0]["cost_usd"] = 0.02
+    (tmp_path / "runs.json").write_text(json.dumps(rows))
+    assert "cost_corrected" not in report_mod.corrected({"cost_usd": 0.04}, tmp_path)
+    assert report_mod.sample_values({"minutes": 390.0, "limit_hits": 1})["minutes"] is None
+    assert report_mod.sample_values({"minutes": 390.0, "waited_minutes": 300})["minutes"] is None
+    assert report_mod.sample_values({"minutes": 9.0, "limit_hits": 0})["minutes"] == 9.0
+    assert report_mod.sample_values({"minutes": 9.0, "limit_hits": 1, "wait_clock": "wall"})["minutes"] == 9.0
