@@ -206,11 +206,17 @@ What was built (`asf/adapters/models/claude_native.py`, `asf/native_bridge.py`):
   about a minute, so long checks run in the background behind `check_result`; no in-session
   budget or turn cap, only the wall clock. The shared parts are in `adapters/models/native.py`.
 
-Still open in this phase: the instruction budget and model defaults (Opus at `high` for the
-writing roles, two fix rounds) are left to `factory.yaml` until the Phase 0 evals say which wins;
-`claude_code_native` is opt-in beside `claude_code` for the same reason. Once the evals favour
-it, the emulated tool protocol and the broker's `t_*` executors are kept only for backends
-without a native mode.
+The Phase 0 evals have now compared them (run `improved-r2`, set v1, 12 cases, 2026-11-19;
+write-up in the runs archive): `claude_code_native` resolved 83% of cases, the same as
+interactive Claude Code, against 71% for the emulated `claude_code`, at about the same cost
+($1.41 against $1.27 a run) and time (about 9 minutes). It is now the Claude backend in this
+repository's `factory.yaml`. The emulated protocol and the broker's `t_*` executors stay for
+backends without a native mode (Ollama) and as a fallback. On Cursor (Grok 4.7) native and
+emulated tie (67% and 72%, within noise), both about 5x slower than Claude.
+
+Still open: the instruction budget and model defaults (Opus at `high` for the writing roles, two
+fix rounds). Set v1 is too easy to settle them: six of its 12 cases are solved by every variant,
+so the next comparison needs harder cases first.
 
 ### Phase 2: checks the author cannot game (2 weeks; the main differentiator)
 
@@ -273,8 +279,9 @@ without a native mode.
 
 | Metric | Today | Target |
 |---|---|---|
-| Hidden-test pass rate on the eval set | baseline (Phase 0) | at or above interactive Claude Code |
-| Visible-versus-hidden gap | baseline | under 5 points |
+| Hidden-test pass rate on the eval set | resolved 83% (native) = interactive 83% (set v1, 2026-11-19) | at or above interactive Claude Code |
+| Visible-versus-hidden gap | 8 points (native) | under 5 points |
+| Project checks green on delivery | 86-94% (factory) against 29% (interactive) | keep above 90% |
 | Gates pass on first try | baseline | interactive baseline + 10 points |
 | Owner revisions per shipped job | baseline | under 0.25 |
 | Owner minutes per merged PR | not measured | falling month over month |

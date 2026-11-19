@@ -369,7 +369,31 @@ estimates (`usd_per_mtok`) and the report says so.
 
 `run` options: `--cases ID ...`, `--repeat K`, `--jobs N` (parallel runs; one at a time by
 default), `--max-usd` (stop starting runs past this spend), `--no-wait` (skip instead of waiting
-out a usage limit), `--keep` (keep checkouts under `$ASF_HOME/evals/work`). Per-job budgets are
+out a usage limit), `--keep` (keep checkouts under `$ASF_HOME/evals/work`), `--settle N` (stop
+repeating a case once its first N runs agree; default 2, 0 runs every repeat), `--run-id` with
+`--resume` (keep the run's finished results, whose spend counts toward `--max-usd`, and do only
+the rest). To hold back new runs without killing any, create `PAUSE` in the run folder, or
+`PAUSE.claude` / `PAUSE.cursor` to hold back only that backend's variants; delete it to go on.
+Waits for a usage limit are timed by the wall clock and left out of the run's minutes.
+`ASF_EVAL_PATH_MAP=/old/prefix=/new/prefix` rewrites case repository paths, so one archive serves
+several machines. `asf eval site [--watch SECONDS]` builds one page over every run in the archive
+(live progress, comparisons, history, each case in full); serve its folder with any static server.
+The local variants `local_gemma` and `local_qwen` run every role on a model served by Ollama
+(`models.provider: ollama`, see `asf/adapters/models/ollama.py`).
+
+What the evals have shown so far (set v1, 12 cases, run `improved-r2`, 2026-11-19):
+
+- `claude_code_native` resolves as many cases as interactive Claude Code (83%), and leaves the
+  project's own checks green 92% of the time against interactive's 29%. It is the Claude
+  backend in this repository's `factory.yaml`.
+- The factory costs about twice an interactive session ($1.41 against $0.69 a run) and takes
+  about three times as long (9 minutes against 3). The implementer alone costs what interactive
+  does; the rest is the tester, reviewer, security pass and gates.
+- Cursor on Grok 4.7 is as accurate (67-72%, within noise) and about 5x slower.
+- A 4B local model on an 8 GB machine completes the pipeline but resolves nothing.
+- Changes measured as helping: triage records assumptions instead of asking; tests' support files
+  may change. Six of the 12 cases are solved by every variant, so separating the variants
+  further needs harder cases. Per-job budgets are
 the variant's own; usage limits are shared with the scheduler (`asf/limits.py`). A case can set
 `test_command`, `setup` commands, `deps_from` (where `execution.clone_dirs` such as `.venv` are
 cloned from) and its own `config`; see `asf/evals/cases.py` for the format and

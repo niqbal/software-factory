@@ -72,7 +72,9 @@ context:
 
 models:
   # Cursor (larger balance) implements; Claude reviews. Either takes over when the other hits
-  # its usage limit.
+  # its usage limit. Claude runs natively (real Claude Code sessions for the writing roles): in
+  # the improved-r2 evals it tied interactive Claude Code on resolved rate (83%) at the same cost
+  # as the emulated harness, with project checks green 92% of the time.
   provider: pool
   backends:
     cursor:
@@ -83,7 +85,7 @@ models:
         implementer: {model: gpt-5.3-codex-high}
         triage: {model: gpt-5.3-codex-low}
     claude:
-      provider: claude_code
+      provider: claude_code_native
       timeout_s: 900
       default: {model: claude-opus-5-5, effort: medium}
       roles:
