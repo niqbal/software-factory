@@ -72,7 +72,8 @@ ASF="$VENV/bin/asf"
 if [ "$LINK" = 1 ]; then
   mkdir -p "$BIN_DIR"
   ln -sf "$ASF" "$BIN_DIR/asf"
-  ok "linked $BIN_DIR/asf"
+  ln -sf "$VENV/bin/asf-mcp" "$BIN_DIR/asf-mcp"
+  ok "linked $BIN_DIR/asf and $BIN_DIR/asf-mcp"
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) warn "$BIN_DIR is not on PATH; add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\"" ;;
