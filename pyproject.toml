@@ -11,6 +11,7 @@ e2e = ["pytest-playwright>=0.5"]
 
 [project.scripts]
 asf = "asf.cli:main"
+asf-mcp = "asf.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

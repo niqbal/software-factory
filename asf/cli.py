@@ -591,6 +591,28 @@ def cmd_adapters(app: App) -> int:
     return 0
 
 
+def cmd_verify(app: App) -> int:
+    """Run the gates over the checkout as it is. Writes nothing; exit 1 when a gate fails."""
+    from . import mcp_server
+    from .verify import Verifier
+    v = Verifier.open(app.repo, app.args.config, app.args.state)
+    if app.args.checks:
+        print(mcp_server.fmt_checks(v.checks(tier=app.args.tier, base=app.args.base)))
+        return 0
+    if app.args.static:
+        data = v.static(tier=app.args.tier, base=app.args.base)
+    else:
+        data = v.gates(tier=app.args.tier, base=app.args.base, compare_base=not app.args.no_base)
+    print(json.dumps(data, indent=1) if app.args.json else mcp_server.fmt_gates(data))
+    return 0 if data["verdict"] == "clean" else 1
+
+
+def cmd_mcp(app: App) -> int:
+    """Serve the verification tools to a coding agent over MCP (stdio)."""
+    from .mcp_server import Server
+    return Server(app.repo, app.args.config, app.args.state).serve()
+
+
 def cmd_eval(app: App) -> int:
     from .evals import commands as eval_commands
     return eval_commands.handle(app.args)
@@ -710,6 +732,14 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ci-workflow", help="GitHub Actions workflow for runner mode")
     s.add_argument("--write", action="store_true")
     s.add_argument("--install")
+    s = sub.add_parser("verify", help="run the gates over this checkout as it is (writes nothing)")
+    s.add_argument("--tier", type=int, default=2, help="risk tier 0-3 (default 2)")
+    s.add_argument("--base", help="commit the change is measured against (default: merge base with the default branch)")
+    s.add_argument("--static", action="store_true", help="read-only gates only; run no project commands")
+    s.add_argument("--checks", action="store_true", help="show what would run; run nothing")
+    s.add_argument("--no-base", action="store_true", help="do not re-run failing commands on the base commit")
+    s.add_argument("--json", action="store_true")
+    sub.add_parser("mcp", help="serve the verification tools to a coding agent over MCP (stdio)")
     sub.add_parser("adapters", help="list available adapters")
     from .evals import commands as eval_commands
     eval_commands.add_parser(sub)
@@ -728,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
         "reviews": cmd_reviews, "cleanup": cmd_cleanup, "pause-all": lambda a: cmd_pause_all(a, True),
         "resume-all": lambda a: cmd_pause_all(a, False), "serve": cmd_serve,
         "ci-workflow": cmd_ci_workflow, "adapters": cmd_adapters, "eval": cmd_eval,
+        "verify": cmd_verify, "mcp": cmd_mcp,
     }
     try:
         return handlers[args.cmd](app)

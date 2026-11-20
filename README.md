@@ -399,6 +399,46 @@ the variant's own; usage limits are shared with the scheduler (`asf/limits.py`).
 cloned from) and its own `config`; see `asf/evals/cases.py` for the format and
 `tests/evals/example_case.yaml` for a synthetic example.
 
+## Verification for other agents: the asf MCP server
+
+An agent that has just written a change is the worst judge of whether it works. The factory's
+answer to that is its gates and its cold-read reviewers, and they are useful outside a factory
+job: `asf mcp` serves them over MCP to any coding agent — Claude Code, Cursor, Copilot — pointed
+at the checkout it has been editing.
+
+```bash
+asf-mcp --repo ~/code/myapp     # stdio MCP server: list_checks, check_diff, run_gates, review_diff
+asf verify                      # the same gates in the terminal; exit 1 when one fails
+asf verify --static             # read-only gates only; no project command runs
+asf verify --checks             # what would run; runs nothing
+```
+
+```json
+{"mcpServers": {"asf": {"command": "asf-mcp", "args": ["--repo", "."]}}}
+```
+
+| Tool | What it does |
+|---|---|
+| `list_checks` | The base commit, the changed files, the gates that would run, the packages the diff touches and their commands. Runs nothing. |
+| `check_diff` | The read-only gates: secrets in added lines, diff size against the tier limit, tests weakened or deleted, new dependencies. Under a second; no project command runs. |
+| `run_gates` | Those plus the project's own lint, typecheck, build, test and e2e commands, for the packages the diff touches. A failing command is re-run on the base commit, so a failure that was already there comes back as `preexisting` instead of being blamed on the change. |
+| `review_diff` | A model that did not write the change reads it cold through read-only tools and reports findings with severities. Costs model time. |
+
+A reference to the wider protocol, written while building this: the primitives, transports,
+extensions and server patterns as of revision 2026-07-28, in
+[docs/forms-of-mcp.html](docs/forms-of-mcp.html) (open it in a browser).
+
+Four things make this worth calling rather than running the tests yourself. The verdict comes
+from a process the writing agent cannot influence: it chooses neither the gates nor the commands,
+and `permissions` and the tier rules are the team's, in `factory.yaml`. The base comparison
+separates the failures the change caused from the ones it inherited. The reviewer cannot edit
+what it is judging — `host_shell` is False on this sandbox, so no native agent session starts in
+the checkout, and the broker denies writes to review roles. And nothing is written to the
+checkout at all: no commit, no reset, and not even a change to the git index — `git add -A -N`,
+which the sandbox uses so untracked files appear in the diff, goes to a scratch index file
+(`asf/verify.py`). A repo with no `factory.yaml` still works: its layout is detected in memory,
+the same way `asf init` drafts one.
+
 ## Commands
 
 | Command | What it does |
@@ -423,6 +463,8 @@ cloned from) and its own `config`; see `asf/evals/cases.py` for the format and
 | `pause-all` / `resume-all` | Kill switch. A `PAUSED` file in the state directory works too. |
 | `serve [--worker]` | Webhook gateway with signature verification, job API, optional worker loop. |
 | `ci-workflow [--write]` | GitHub Actions workflow for runner mode. |
+| `verify [--tier N] [--base REF] [--static] [--checks] [--no-base] [--json]` | Run the gates over the checkout as it is, writing nothing to it. Exits 1 when a gate fails, so it fits in a pre-push hook or CI. |
+| `mcp` | Serve the verification tools (`list_checks`, `check_diff`, `run_gates`, `review_diff`) to a coding agent over MCP on stdio. `asf-mcp --repo PATH` is the same server with its own entry point, which is the form an MCP client config wants. |
 | `adapters` | Lists installed adapters, including third-party ones registered by entry point. |
 | `eval import \| mine \| check \| run \| report \| list` | The eval harness (see above): draft cases from done jobs or history, sort their hidden tests, run variants, compare them. |
 
@@ -439,6 +481,7 @@ override any config value (CI uses this to switch delivery to GitHub).
 | Tool broker: role permissions, protected paths, test integrity, command allowlist, secret redaction | `asf/broker.py` | Built, tested |
 | Agent roles: triage, implementer, tester, reviewer, security, CI fixer | `asf/agents/` | Built, live-tested with Claude |
 | Deterministic gates with base-commit comparison | `asf/gates.py` | Built, tested |
+| Gates and a cold review over a checkout the factory does not own, served to other agents over MCP | `asf/verify.py`, `asf/mcp_server.py` | Built, tested (`tests/test_verify.py`) |
 | Browser reproductions: app lifecycle, reproducer agent (`claude -p` + `@playwright/mcp` only), e2e suite | `asf/apprun.py`, `asf/repro.py`, `asf/demo.py` | Scripted tests for every path; live-tested on the console scroll bug (`tests/test_repro_real.py`, opt-in) |
 | Setup agent | `asf/setup_agent.py` | Built, tested on Node monorepo, Python, Go fixtures and two real repos |
 | Webhook gateway | `asf/server.py` | Built, tested with signed requests |

@@ -1,0 +1,948 @@
+<title>Forms of MCP</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  /* Layout: a three-view reference tool. Sticky tab bar, filterable protocol surface,
+     pattern explorer, and a picker that resolves requirements into forms. */
+  :root {
+    --bg: #fbfbfc; --surface: #ffffff; --surface-2: #f3f4f6; --surface-3: #e9ebef;
+    --fg: #16181d; --fg-dim: #5a616e; --line: #dfe2e8;
+    --accent: #0c6a72; --accent-soft: #e3f1f2; --accent-ink: #ffffff;
+    --ok: #1d6f42; --ok-soft: #e4f2ea;
+    --warn: #8a5a00; --warn-soft: #faefd9;
+    --stop: #9a2c28; --stop-soft: #fae8e6;
+    --font-ui: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --font-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1013; --surface: #16191e; --surface-2: #1d2127; --surface-3: #262b33;
+      --fg: #e8eaee; --fg-dim: #9aa2b1; --line: #2a2f38;
+      --accent: #4bc3ca; --accent-soft: #11292c; --accent-ink: #07191b;
+      --ok: #6cc795; --ok-soft: #13251c;
+      --warn: #d9a74a; --warn-soft: #272013;
+      --stop: #e58b85; --stop-soft: #2a1716;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1013; --surface: #16191e; --surface-2: #1d2127; --surface-3: #262b33;
+    --fg: #e8eaee; --fg-dim: #9aa2b1; --line: #2a2f38;
+    --accent: #4bc3ca; --accent-soft: #11292c; --accent-ink: #07191b;
+    --ok: #6cc795; --ok-soft: #13251c;
+    --warn: #d9a74a; --warn-soft: #272013;
+    --stop: #e58b85; --stop-soft: #2a1716;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font-body);
+    font-size: 1.02rem; line-height: 1.62;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 0 3.5rem;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
+    background: var(--bg); z-index: 10;
+  }
+  .wrap { max-width: 64rem; margin: 0 auto; }
+  .prose { max-width: 40rem; }
+
+  h1, h2, h3, h4 { font-family: var(--font-ui); text-wrap: balance; margin: 0; line-height: 1.22; }
+  h1 { font-size: clamp(1.75rem, 5vw, 2.6rem); font-weight: 600; letter-spacing: -0.022em; }
+  h2 { font-size: clamp(1.3rem, 3.2vw, 1.6rem); font-weight: 600; letter-spacing: -0.012em; }
+  h3 { font-size: 1.08rem; font-weight: 600; }
+  h4 { font-size: 0.92rem; font-weight: 600; }
+  p { margin: 0 0 1rem; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  code, kbd { font-family: var(--font-mono); font-size: 0.86em; }
+  :not(pre) > code {
+    background: var(--surface-2); padding: 0.1em 0.34em; border-radius: 3px;
+    border: 1px solid var(--line); white-space: nowrap;
+  }
+  strong { font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  /* ---- masthead + tabs ---- */
+  .masthead { padding-block: clamp(1.8rem, 5vw, 3rem) 1.2rem; }
+  .eyebrow {
+    font-family: var(--font-ui); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 0.7rem;
+  }
+  .standfirst { font-size: clamp(1rem, 2.2vw, 1.14rem); color: var(--fg-dim); margin: 0.9rem 0 0; }
+  .rev {
+    font-family: var(--font-mono); font-size: 0.74rem; color: var(--fg-dim); margin-top: 1.1rem;
+    display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem;
+  }
+  .tabbar {
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+    display: flex; gap: 0.3rem; overflow-x: auto; padding-block: 0.55rem;
+  }
+  .tabbar button {
+    font-family: var(--font-ui); font-size: 0.86rem; font-weight: 500; white-space: nowrap;
+    background: transparent; color: var(--fg-dim); border: 1px solid transparent;
+    border-radius: 999px; padding: 0.34rem 0.85rem; cursor: pointer;
+  }
+  .tabbar button:hover { color: var(--fg); background: var(--surface-2); }
+  .tabbar button[aria-selected="true"] {
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+  .view { padding-block: 1.8rem 0; }
+  .view > * + * { margin-top: 1.7rem; }
+
+  .block { display: flex; flex-direction: column; gap: 0.85rem; }
+  .block > h2 + p, .block > h3 + p { margin-bottom: 0; }
+
+  /* ---- controls ---- */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 0.6rem; align-items: center;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px;
+    padding: 0.7rem 0.8rem;
+  }
+  .controls .label {
+    font-family: var(--font-ui); font-size: 0.7rem; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--fg-dim); margin-right: 0.1rem;
+  }
+  .chip {
+    font-family: var(--font-ui); font-size: 0.78rem; font-weight: 500; cursor: pointer;
+    background: var(--surface); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0.24rem 0.7rem;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .count { font-family: var(--font-mono); font-size: 0.76rem; color: var(--fg-dim); margin-left: auto; }
+  input[type="search"] {
+    font-family: var(--font-ui); font-size: 0.85rem; color: var(--fg);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+    padding: 0.28rem 0.8rem; min-width: 0; flex: 1 1 11rem;
+  }
+
+  /* ---- tables ---- */
+  .scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-family: var(--font-ui); font-size: 0.87rem; }
+  caption {
+    font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600; color: var(--fg-dim);
+    text-align: left; padding: 0.65rem 0.9rem; border-bottom: 1px solid var(--line);
+  }
+  th, td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; font-size: 0.74rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-dim); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; }
+  .col-why { min-width: 15rem; }
+  .empty { padding: 0.9rem; font-family: var(--font-ui); font-size: 0.82rem; color: var(--fg-dim); }
+
+  .pill {
+    font-family: var(--font-ui); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; padding: 0.15rem 0.42rem; border-radius: 3px; white-space: nowrap;
+    display: inline-block;
+  }
+  .pill.current { color: var(--ok); background: var(--ok-soft); }
+  .pill.deprecated { color: var(--warn); background: var(--warn-soft); }
+  .pill.removed { color: var(--stop); background: var(--stop-soft); }
+  .pill.experimental { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---- pattern cards ---- */
+  .patterns { display: grid; gap: 0.9rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); }
+  .pattern {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+    padding: 1.05rem 1.1rem; display: flex; flex-direction: column; gap: 0.55rem; min-width: 0;
+  }
+  .pattern h3 { display: flex; align-items: baseline; gap: 0.45rem; flex-wrap: wrap; }
+  .pattern .tag {
+    font-family: var(--font-mono); font-size: 0.68rem; font-weight: 400; color: var(--fg-dim);
+    border: 1px solid var(--line); border-radius: 3px; padding: 0.06rem 0.3rem;
+  }
+  .pattern p { margin: 0; font-size: 0.94rem; }
+  .pattern dt {
+    font-family: var(--font-ui); font-size: 0.67rem; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--fg-dim);
+  }
+  .pattern dl { margin: 0; display: grid; gap: 0.42rem; }
+  .pattern dd { margin: 0.1rem 0 0; font-size: 0.91rem; }
+  .pattern dd.ex { font-family: var(--font-mono); font-size: 0.76rem; line-height: 1.5; color: var(--fg-dim); }
+  .pattern .risk { border-left: 2px solid var(--warn); padding-left: 0.65rem; font-size: 0.89rem; color: var(--fg-dim); }
+
+  /* ---- picker ---- */
+  .picker { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); align-items: start; }
+  .reqs { display: flex; flex-direction: column; gap: 0.1rem; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 0.5rem; }
+  .req { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.45rem 0.55rem; border-radius: 5px; cursor: pointer; font-size: 0.93rem; }
+  .req:hover { background: var(--surface-2); }
+  .req input { margin: 0.32rem 0 0; accent-color: var(--accent); flex: none; }
+  .out { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 1rem 1.05rem; display: flex; flex-direction: column; gap: 0.8rem; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 3.6rem); }
+  .rec { display: flex; flex-direction: column; gap: 0.2rem; }
+  .rec .kind {
+    font-family: var(--font-ui); font-size: 0.66rem; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .rec .name { font-family: var(--font-ui); font-weight: 600; font-size: 0.97rem; }
+  .rec .why { font-size: 0.9rem; color: var(--fg-dim); }
+  .conflict {
+    border-left: 3px solid var(--warn); background: var(--warn-soft); color: var(--fg);
+    padding: 0.65rem 0.8rem; border-radius: 0 5px 5px 0; font-size: 0.9rem;
+  }
+  .conflict strong { color: var(--warn); }
+  .placeholder { font-size: 0.93rem; color: var(--fg-dim); }
+
+  /* ---- stepper ---- */
+  .stepper { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 0.8rem; display: flex; flex-direction: column; gap: 0.8rem; }
+  .steps { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .steps button {
+    font-family: var(--font-mono); font-size: 0.76rem; cursor: pointer;
+    background: var(--surface-2); color: var(--fg-dim); border: 1px solid var(--line);
+    border-radius: 5px; padding: 0.24rem 0.6rem;
+  }
+  .steps button[aria-current="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .diagram { overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; height: auto; min-width: 31rem; }
+  .diagram .life { stroke: var(--line); }
+  .diagram .c2s { stroke: var(--accent); }
+  .diagram .c2s-tip { fill: var(--accent); }
+  .diagram .wait { stroke: var(--warn); }
+  .diagram .wait-tip { fill: var(--warn); }
+  .diagram .done { stroke: var(--ok); }
+  .diagram .done-tip { fill: var(--ok); }
+  .diagram .dim { fill: var(--fg-dim); }
+  .diagram .lbl { fill: var(--fg); }
+  .mrtr-step { opacity: 1; }
+  .mrtr-step.is-dim { opacity: 0.17; }
+  @media (prefers-reduced-motion: no-preference) {
+    .mrtr-step { transition: opacity 180ms ease; }
+    .chip, .tabbar button, .steps button { transition: background-color 130ms ease, color 130ms ease; }
+  }
+  .step-note { font-size: 0.93rem; margin: 0; }
+  .step-note strong { font-family: var(--font-ui); }
+
+  pre {
+    font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.6; margin: 0;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 0.85rem 0.95rem; overflow-x: auto;
+  }
+  .split { display: grid; gap: 0.9rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); }
+  .split > figure { margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+  figcaption { font-family: var(--font-ui); font-size: 0.77rem; color: var(--fg-dim); }
+
+  .note {
+    background: var(--surface-2); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0; padding: 0.9rem 1.05rem; font-size: 0.95rem;
+  }
+  .note h4 { margin-bottom: 0.3rem; }
+  .note :last-child { margin-bottom: 0; }
+  ul.tight { margin: 0; padding-left: 1.15rem; }
+  ul.tight li { margin-bottom: 0.4rem; }
+
+  footer { margin-top: 2.2rem; padding-top: 1.4rem; border-top: 1px solid var(--line); font-family: var(--font-ui); font-size: 0.82rem; color: var(--fg-dim); }
+  footer p { margin-bottom: 0.7rem; }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Protocol reference</p>
+  <h1>Forms of MCP</h1>
+  <p class="standfirst prose">MCP has three independent sets of forms: what a server may expose, how
+    it is reached, and what shape of problem it solves. Filter the protocol surface by what is still
+    current, explore the patterns, or describe what you are building and see which forms it wants.</p>
+  <div class="rev">
+    <span>Checked against revision 2026-07-28</span><span>Written 20 November 2026</span>
+  </div>
+</header>
+
+<div class="tabbar" role="tablist" aria-label="Views">
+  <button id="tab-protocol" role="tab" aria-selected="true" aria-controls="view-protocol">Protocol surface</button>
+  <button id="tab-patterns" role="tab" aria-selected="false" aria-controls="view-patterns">11 patterns</button>
+  <button id="tab-choose" role="tab" aria-selected="false" aria-controls="view-choose">Choose a form</button>
+</div>
+
+<!-- ============================ PROTOCOL ============================ -->
+<div class="view" id="view-protocol" role="tabpanel" aria-labelledby="tab-protocol">
+
+  <div class="block prose">
+    <h2>What the protocol itself offers</h2>
+    <p>Filter by status to see what is safe to build on now, or set it to Deprecated and Removed to
+      get your migration list for revision 2026-07-28.</p>
+  </div>
+
+  <div class="controls" id="status-filter">
+    <span class="label">Status</span>
+    <button class="chip" type="button" data-status="all" aria-pressed="true">All</button>
+    <button class="chip" type="button" data-status="current" aria-pressed="false">Current</button>
+    <button class="chip" type="button" data-status="deprecated" aria-pressed="false">Deprecated</button>
+    <button class="chip" type="button" data-status="removed" aria-pressed="false">Removed</button>
+    <button class="chip" type="button" data-status="experimental" aria-pressed="false">Experimental</button>
+    <span class="count" id="status-count"></span>
+  </div>
+
+  <div class="block">
+    <h3>Primitives, by who pulls the trigger</h3>
+    <p class="prose">The real difference between the three is not what they hold. It is who decides to
+      use them. A document served as a resource costs nothing until the host attaches it; the same
+      document behind a tool costs a model decision and a round trip.</p>
+    <div class="scroller" data-table>
+      <table>
+        <caption>Server primitives</caption>
+        <thead><tr><th>Primitive</th><th>Controlled by</th><th>Methods</th><th class="col-why">What the form is for</th></tr></thead>
+        <tbody>
+          <tr data-status="current">
+            <td><strong>Tools</strong></td><td>The model</td>
+            <td><code>tools/list</code><br><code>tools/call</code></td>
+            <td>Functions the model invokes on its own judgment. The default form, and the only one most clients surface well.</td>
+          </tr>
+          <tr data-status="current">
+            <td><strong>Resources</strong></td><td>The application</td>
+            <td><code>resources/list</code><br><code>resources/read</code><br><code>resources/templates/list</code></td>
+            <td>Addressable context the host attaches, identified by URI. The model cannot spend its own context budget here.</td>
+          </tr>
+          <tr data-status="current">
+            <td><strong>Prompts</strong></td><td>The user</td>
+            <td><code>prompts/list</code><br><code>prompts/get</code></td>
+            <td>Templated message sets a person picks deliberately, which is how slash commands are built. Ships procedure rather than capability.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="empty" hidden>No primitives at this status.</p>
+    </div>
+    <p class="prose">Tool results carry <code>content</code>, optional <code>structuredContent</code>,
+      and <code>isError</code>. A failure inside the tool is a normal result with
+      <code>isError: true</code>, which the model can read and react to. A protocol failure is a
+      JSON-RPC error, which it cannot. Putting a business failure in the wrong one is a common bug.</p>
+  </div>
+
+  <div class="block">
+    <h3>What the client offers back</h3>
+    <p class="prose">This is the part that changed most in 2026. Server-initiated requests are gone
+      entirely: a server may no longer send <code>roots/list</code>,
+      <code>sampling/createMessage</code>, or <code>elicitation/create</code> as separate requests.</p>
+    <div class="scroller" data-table>
+      <table>
+        <caption>Client-side features</caption>
+        <thead><tr><th>Feature</th><th>Status</th><th class="col-why">What it does, and what replaced it</th></tr></thead>
+        <tbody>
+          <tr data-status="current">
+            <td><strong>Elicitation</strong><br><code>elicitation/create</code></td>
+            <td><span class="pill current">Current</span></td>
+            <td>The server asks the person a question mid-call. Two modes: <code>form</code>, limited to a flat object of primitives, and <code>url</code>, which sends them out of band. Credentials must use <code>url</code> mode. Answers return <code>accept</code>, <code>decline</code>, or <code>cancel</code>.</td>
+          </tr>
+          <tr data-status="deprecated">
+            <td><strong>Sampling</strong><br><code>sampling/createMessage</code></td>
+            <td><span class="pill deprecated">Deprecated</span></td>
+            <td>Let a server borrow the client's model. Deprecated under SEP-2577; call an LLM provider directly instead.</td>
+          </tr>
+          <tr data-status="deprecated">
+            <td><strong>Roots</strong><br><code>roots/list</code></td>
+            <td><span class="pill deprecated">Deprecated</span></td>
+            <td>Told a server which directories it could work in. Replaced by paths as tool parameters, resource URIs, or server configuration.</td>
+          </tr>
+          <tr data-status="removed">
+            <td><strong>Logging</strong><br><code>logging/setLevel</code></td>
+            <td><span class="pill removed">Removed</span></td>
+            <td>The level-setting method is gone this revision. Log to stderr on stdio, or use OpenTelemetry.</td>
+          </tr>
+          <tr data-status="removed">
+            <td><strong>Ping</strong><br><code>ping</code></td>
+            <td><span class="pill removed">Removed</span></td>
+            <td>Removed along with the session it existed to keep alive.</td>
+          </tr>
+          <tr data-status="removed">
+            <td><strong>Roots changed</strong><br><code>notifications/roots/list_changed</code></td>
+            <td><span class="pill removed">Removed</span></td>
+            <td>Follows roots out of the protocol.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="empty" hidden>No client features at this status.</p>
+    </div>
+    <div class="note prose">
+      <h4>The deprecation clock</h4>
+      <p>Deprecated features stay in the spec for at least twelve months from this revision. The
+        registry puts the earliest removal at the first revision released on or after 28 July 2027,
+        and removal is a maintainer decision that may land later. Code written against sampling or
+        roots today still runs; code written against them tomorrow is a migration you have chosen.</p>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>Transports, which decide the architecture</h3>
+    <div class="scroller" data-table>
+      <table>
+        <caption>Transports</caption>
+        <thead><tr><th>Transport</th><th>Status</th><th class="col-why">Shape, and what it suits</th></tr></thead>
+        <tbody>
+          <tr data-status="current">
+            <td><strong>stdio</strong></td><td><span class="pill current">Current</span></td>
+            <td>The client launches the server as a subprocess and speaks newline-delimited JSON-RPC over its pipes. No port, no URL, no daemon; it lives and dies with the session. The only form that can see the machine. Authorization does not apply: credentials come from the environment.</td>
+          </tr>
+          <tr data-status="current">
+            <td><strong>Streamable HTTP</strong></td><td><span class="pill current">Current</span></td>
+            <td>One endpoint accepting POST, answering with JSON or a request-scoped SSE stream. The form for anything multi-tenant. Each POST carries <code>MCP-Protocol-Version</code>, <code>Mcp-Method</code>, and <code>Mcp-Name</code> on the three named methods; <code>Origin</code> must be validated; closing the stream is how a call is cancelled.</td>
+          </tr>
+          <tr data-status="deprecated">
+            <td><strong>HTTP+SSE</strong></td><td><span class="pill deprecated">Deprecated</span></td>
+            <td>The original two-endpoint remote transport, deprecated since revision 2025-03-26 and reclassified under SEP-2596. Removal is set three months after that proposal reaches Final.</td>
+          </tr>
+          <tr data-status="current">
+            <td><strong>Custom</strong></td><td><span class="pill current">Permitted</span></td>
+            <td>Any carrier preserving the JSON-RPC format, the message patterns, and per-request metadata. Byte-stream carriers should reuse the stdio framing.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="empty" hidden>No transports at this status.</p>
+    </div>
+    <p class="prose">This is the choice people get wrong first, usually by asking for a URL. A remote
+      server cannot see your filesystem, so the moment the work involves uncommitted files or a
+      command that must run on this machine, the transport decides the architecture. The alternative
+      is uploading the data, which is a different product with different consent questions.</p>
+  </div>
+
+  <div class="block">
+    <h3>The stateless turn</h3>
+    <p class="prose">Revision 2026-07-28 removed the handshake. No <code>initialize</code>, no
+      <code>notifications/initialized</code>, no <code>Mcp-Session-Id</code>, no GET stream endpoint,
+      no <code>Last-Event-ID</code> resumability. Every request carries its own context.</p>
+    <div class="split">
+      <figure>
+        <pre>// Before: negotiate once, then rely
+// on the session for everything after.
+--&gt; initialize            { capabilities }
+&lt;-- result                { capabilities }
+--&gt; notifications/initialized
+--&gt; tools/call            [Mcp-Session-Id]
+--&gt; tools/call            [Mcp-Session-Id]</pre>
+        <figcaption>Session-based, through revision 2026-03</figcaption>
+      </figure>
+      <figure>
+        <pre>// After: each request stands alone.
+_meta["io.modelcontextprotocol/protocolVersion"]
+_meta["io.modelcontextprotocol/clientCapabilities"]
+_meta["io.modelcontextprotocol/clientInfo"]
+
+// and a server MUST answer discovery:
+--&gt; server/discover
+&lt;-- { supportedVersions: ["2026-07-28"],
+      capabilities, resultType: "complete" }</pre>
+        <figcaption>Stateless, revision 2026-07-28</figcaption>
+      </figure>
+    </div>
+    <p class="prose">The point is deployment shape. A stateless server sits behind an ordinary load
+      balancer, scales horizontally, and survives a restart mid-conversation. The cost is that state
+      must become explicit, and the spec's own guidance is to hand it back as a value: a creation tool
+      returns <code>basket_id</code>, and every later call passes it as an argument.</p>
+  </div>
+
+  <div class="block">
+    <h3>Multi round-trip requests, step by step</h3>
+    <p class="prose">Removing sessions broke the one thing that needed them: a server interrupting its
+      own call to ask for something. MRTR moves that interruption into the result. Step through it.</p>
+    <div class="stepper">
+      <div class="steps" id="mrtr-steps" role="group" aria-label="Round-trip steps">
+        <button type="button" data-step="1" aria-current="true">1 &middot; call</button>
+        <button type="button" data-step="2" aria-current="false">2 &middot; input_required</button>
+        <button type="button" data-step="3" aria-current="false">3 &middot; retry</button>
+        <button type="button" data-step="4" aria-current="false">4 &middot; complete</button>
+      </div>
+      <div class="diagram">
+        <svg id="mrtr-svg" viewBox="0 0 760 212" role="img" aria-label="A tools/call returns input_required with requestState; the client gathers input and retries with a new id and inputResponses, and the server then returns a complete result.">
+          <text class="lbl" x="8" y="22" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="500">Client</text>
+          <text class="lbl" x="676" y="22" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="500">Server</text>
+          <line class="life" x1="36" y1="34" x2="36" y2="200" stroke-width="1.5" fill="none"/>
+          <line class="life" x1="706" y1="34" x2="706" y2="200" stroke-width="1.5" fill="none"/>
+          <g class="mrtr-step" data-step="1">
+            <line class="c2s" x1="36" y1="58" x2="698" y2="58" stroke-width="1.5" fill="none"/>
+            <path class="c2s-tip" d="M698 53 L708 58 L698 63 Z"/>
+            <text class="lbl" x="48" y="50" font-family="IBM Plex Mono, monospace" font-size="11.5">tools/call &nbsp;id: 1</text>
+          </g>
+          <g class="mrtr-step" data-step="2">
+            <line class="wait" x1="706" y1="104" x2="44" y2="104" stroke-width="1.5" fill="none"/>
+            <path class="wait-tip" d="M44 99 L34 104 L44 109 Z"/>
+            <text class="lbl" x="48" y="96" font-family="IBM Plex Mono, monospace" font-size="11.5">resultType: "input_required" &nbsp;+ inputRequests &nbsp;+ requestState</text>
+          </g>
+          <g class="mrtr-step" data-step="3">
+            <text class="dim" x="48" y="130" font-family="IBM Plex Sans, sans-serif" font-size="11.5" font-style="italic">client elicits from the person, or calls its own model</text>
+            <line class="c2s" x1="36" y1="156" x2="698" y2="156" stroke-width="1.5" fill="none"/>
+            <path class="c2s-tip" d="M698 151 L708 156 L698 161 Z"/>
+            <text class="lbl" x="48" y="148" font-family="IBM Plex Mono, monospace" font-size="11.5">tools/call &nbsp;id: 2 &nbsp;+ inputResponses &nbsp;+ requestState (echoed)</text>
+          </g>
+          <g class="mrtr-step" data-step="4">
+            <line class="done" x1="706" y1="194" x2="44" y2="194" stroke-width="1.5" fill="none"/>
+            <path class="done-tip" d="M44 189 L34 194 L44 199 Z"/>
+            <text class="lbl" x="48" y="186" font-family="IBM Plex Mono, monospace" font-size="11.5">resultType: "complete"</text>
+          </g>
+        </svg>
+      </div>
+      <p class="step-note" id="mrtr-note"></p>
+      <pre id="mrtr-json"></pre>
+    </div>
+    <p class="prose">Every result now carries a required <code>resultType</code>, one of
+      <code>complete</code> or <code>input_required</code>, with <code>task</code> added by the Tasks
+      extension. Results from older servers that omit the field are read as <code>complete</code>. The
+      pattern applies only to <code>tools/call</code>, <code>resources/read</code>, and
+      <code>prompts/get</code>.</p>
+    <div class="note prose">
+      <h4>One security consequence</h4>
+      <p><code>requestState</code> travels through the client, so it is attacker-controlled. If it
+        influences authorization or business logic, the server must integrity-protect it with an HMAC
+        or AEAD and reject what fails verification. The spec does not guarantee single use, so
+        anything that must happen once has to be enforced server-side.</p>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>Extensions, the forms outside the core</h3>
+    <p class="prose">Capabilities not ready to be mandatory live as named extensions, identified as
+      <code>{vendor-prefix}/{name}</code> and declared by both sides. Either side lacking one falls
+      back to core behavior. Stages run Experimental, Beta, Stable.</p>
+    <div class="scroller" data-table>
+      <table>
+        <caption>Published extensions</caption>
+        <thead><tr><th>Extension</th><th>Stage</th><th class="col-why">What form it adds</th></tr></thead>
+        <tbody>
+          <tr data-status="current">
+            <td><strong>MCP Apps</strong><br><code>io.modelcontextprotocol/ui</code></td>
+            <td><span class="pill current">Stable</span></td>
+            <td>A server ships interactive UI. A tool points at a <code>ui://</code> HTML resource; the host renders it in a sandboxed iframe and the page talks back over postMessage with <code>ui/</code> methods, and can itself call <code>tools/call</code>. The resource may declare a CSP and permissions.</td>
+          </tr>
+          <tr data-status="experimental">
+            <td><strong>MCP Tasks</strong><br><code>io.modelcontextprotocol/tasks</code></td>
+            <td><span class="pill experimental">Beta</span></td>
+            <td>Work that outlives a request. The server answers <code>resultType: "task"</code> with a <code>taskId</code>; the client polls <code>tasks/get</code>. Statuses run <code>working</code>, <code>input_required</code>, <code>completed</code>, <code>failed</code>, <code>cancelled</code>, and mid-flight input arrives through <code>tasks/update</code>.</td>
+          </tr>
+          <tr data-status="experimental">
+            <td><strong>Skills over MCP</strong><br>ext-skills</td>
+            <td><span class="pill experimental">Beta</span></td>
+            <td>Agent workflow instructions discovered as resources. The prompts idea grown up: a server distributes procedure, not just capability.</td>
+          </tr>
+          <tr data-status="experimental">
+            <td><strong>Server Cards</strong><br>ext-server-card</td>
+            <td><span class="pill experimental">Beta</span></td>
+            <td>Metadata fetched over HTTP before connecting, so a client can know what a server is without launching it.</td>
+          </tr>
+          <tr data-status="current">
+            <td><strong>OAuth Client Credentials</strong><br>Enterprise-Managed Authorization</td>
+            <td><span class="pill current">Stable</span></td>
+            <td>Machine-to-machine auth with no human in the loop, and centralized access control for organizations.</td>
+          </tr>
+          <tr data-status="experimental">
+            <td><strong>Interceptors, variants, tool annotations, file uploads, filesystems</strong></td>
+            <td><span class="pill experimental">Experimental</span></td>
+            <td>Incubating. Interceptors in particular is where gateway and policy behavior is being worked out.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="empty" hidden>No extensions at this status.</p>
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>Authorization, for anything remote</h3>
+    <p class="prose">Remote servers are expected to conform to the OAuth 2.1 draft with a specific
+      discovery chain. A 401 carries <code>WWW-Authenticate</code> with <code>resource_metadata</code>;
+      the client follows RFC 9728 protected resource metadata to find the authorization server, which
+      must publish RFC 8414 or OpenID Connect discovery.</p>
+    <p class="prose">Two requirements catch people out. Clients must send the RFC 8707
+      <code>resource</code> parameter, set to the server's canonical URI, in both the authorization and
+      token requests, even when the authorization server ignores it; and the server must validate that
+      a token's audience is itself, so a token minted for another service cannot be replayed at it.
+      Dynamic Client Registration is now deprecated in favor of Client ID Metadata Documents or
+      pre-registration. Tokens go in the <code>Authorization</code> header, never a query string.</p>
+  </div>
+</div>
+
+<!-- ============================ PATTERNS ============================ -->
+<div class="view" id="view-patterns" role="tabpanel" aria-labelledby="tab-patterns" hidden>
+  <div class="block prose">
+    <h2>Eleven patterns, and what each is worth</h2>
+    <p>The protocol forms say what is possible. These are the shapes servers actually take. Each one
+      covers something a language model structurally lacks, and each fails in its own way. Filter by
+      what the pattern supplies, or search the examples.</p>
+  </div>
+  <div class="controls" id="pattern-filter">
+    <span class="label">Supplies</span>
+    <button class="chip" type="button" data-gives="capability" aria-pressed="false">Capability</button>
+    <button class="chip" type="button" data-gives="context" aria-pressed="false">Context</button>
+    <button class="chip" type="button" data-gives="judgment" aria-pressed="false">Judgment</button>
+    <button class="chip" type="button" data-gives="control" aria-pressed="false">Control</button>
+    <input type="search" id="pattern-search" placeholder="Search patterns and examples" aria-label="Search patterns and examples">
+    <span class="count" id="pattern-count"></span>
+  </div>
+  <div class="patterns" id="pattern-list"></div>
+  <p class="placeholder" id="pattern-empty" hidden>Nothing matches that. Clear a filter to see all eleven.</p>
+</div>
+
+<!-- ============================ CHOOSE ============================ -->
+<div class="view" id="view-choose" role="tabpanel" aria-labelledby="tab-choose" hidden>
+  <div class="block prose">
+    <h2>Choose a form</h2>
+    <p>Tick everything true of what you are building. More than one usually is, and some combinations
+      pull against each other, which is the part worth knowing before you write code.</p>
+  </div>
+  <div class="picker">
+    <div class="reqs" id="req-list"></div>
+    <div class="out" id="rec-out" aria-live="polite"></div>
+  </div>
+</div>
+
+<footer>
+  <p><strong>Sources.</strong> Protocol details are from the official specification pages for revision
+    2026-07-28 at modelcontextprotocol.io: the changelog, the server and client feature pages,
+    transports and Streamable HTTP, authorization, the multi round-trip pattern, the deprecated-feature
+    registry, and the extension overviews for Tasks and Apps. Ecosystem claims about install counts
+    and quality come from third-party trackers and are rough.</p>
+  <p>Not verified here: the sampling, logging, and stdio pages, the versioning matrix, the full
+    <code>ui/</code> method set, and the complete Tasks method list. Revision dates move; check the
+    changelog before relying on a field name.</p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var store = {
+    get: function (k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } },
+    set: function (k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* private window */ } }
+  };
+
+  /* ---------------------------- views ---------------------------- */
+  var VIEWS = ["protocol", "patterns", "choose"];
+  function showView(name, remember) {
+    if (VIEWS.indexOf(name) === -1) { name = "protocol"; }
+    VIEWS.forEach(function (v) {
+      var tab = document.getElementById("tab-" + v);
+      var panel = document.getElementById("view-" + v);
+      var on = v === name;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      panel.hidden = !on;
+    });
+    if (remember) { store.set("mcp.view", name); }
+  }
+  VIEWS.forEach(function (v) {
+    document.getElementById("tab-" + v).addEventListener("click", function () {
+      showView(v, true);
+      if (location.hash.slice(1) !== v) { location.hash = v; }
+    });
+  });
+  window.addEventListener("hashchange", function () { showView(location.hash.slice(1), true); });
+
+  /* ------------------------ status filter ------------------------ */
+  var statusBar = document.getElementById("status-filter");
+  var statusCount = document.getElementById("status-count");
+  function applyStatus(status) {
+    var shown = 0, total = 0;
+    Array.prototype.forEach.call(statusBar.querySelectorAll(".chip"), function (c) {
+      c.setAttribute("aria-pressed", c.dataset.status === status ? "true" : "false");
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-table]"), function (box) {
+      var rows = box.querySelectorAll("tbody tr");
+      var visible = 0;
+      Array.prototype.forEach.call(rows, function (row) {
+        var on = status === "all" || row.dataset.status === status;
+        row.hidden = !on;
+        if (on) { visible++; }
+        total++;
+      });
+      shown += visible;
+      box.querySelector("table").hidden = visible === 0;
+      box.querySelector(".empty").hidden = visible !== 0;
+    });
+    statusCount.textContent = status === "all"
+      ? total + " entries"
+      : shown + " of " + total + " entries";
+    store.set("mcp.status", status);
+  }
+  statusBar.addEventListener("click", function (e) {
+    var chip = e.target.closest(".chip");
+    if (chip) { applyStatus(chip.dataset.status); }
+  });
+
+  /* ---------------------------- patterns ---------------------------- */
+  var PATTERNS = [
+    { name: "API bridge", tag: "most common", gives: ["capability", "context"],
+      sum: "Wraps a remote service: holds the credential, exposes a handful of its endpoints as tools.",
+      value: "The model can neither hold your API key nor be trusted with a 200-endpoint surface. The server keeps the secret and narrows the API to the calls that matter.",
+      ex: "GitHub · Linear · Stripe · Slack · Sentry · Asana",
+      risk: "Mirroring every endpoint one-to-one. Sixty tools from one server degrades every other tool in the session, and a well-known public API is something the model can often just call itself." },
+    { name: "Local bridge", tag: "stdio only", gives: ["capability", "context"],
+      sum: "Exposes what is on this machine: files, git, a shell, a local database.",
+      value: "Your laptop has no API. This is the pattern with no remote substitute, which is why filesystem and local database servers remain the most installed of all.",
+      ex: "filesystem · git · sqlite · docker",
+      risk: "Unbounded reach. Without path scoping and a read-only default, you have handed a language model your home directory." },
+    { name: "Query server", tag: "beyond raw SQL", gives: ["context", "control"],
+      sum: "Schema introspection and a constrained query surface over a real dataset.",
+      value: "A model cannot query anything directly; it emits text and something else executes. So the comparison that matters is with a shell running psql. Against that: the model never sees the connection string, read-only is enforced rather than requested, schema arrives as a tool result instead of as \\d+ output, and results come back capped. In a client with no shell, which is most of them, it is the only route to the data at all.",
+      ex: "Postgres · BigQuery · Snowflake · DuckDB · ClickHouse",
+      risk: "Shipping raw SQL against 300 tables. The queries parse, run and are quietly wrong: joined at the wrong grain, missing the tenant filter, counting soft-deleted rows. The rules that matter are not in the schema, so the strong form of this pattern exposes curated views and named metrics instead. Unbounded result sets are the other failure." },
+    { name: "Knowledge lookup", tag: "", gives: ["context"],
+      sum: "Fetches current documentation or reference material on demand.",
+      value: "Addresses the model's most predictable failure: library APIs that moved after the training cutoff. The reason this pattern tops install charts is that the gap is universal.",
+      ex: "Context7 · private wiki and RAG bridges",
+      risk: "Serving whole pages instead of the relevant section, which trades a hallucination for a context bill." },
+    { name: "Capability server", tag: "", gives: ["capability"],
+      sum: "Hands the model a faculty it does not have: a browser, a sandbox, a renderer.",
+      value: "Text in, text out cannot click a button or run untrusted code. This pattern is the arms and legs, and it is why browser automation became an early flagship.",
+      ex: "Playwright · e2b · Daytona · image and PDF tools",
+      risk: "A raw evaluate() escape hatch. One general-purpose execution tool quietly re-creates arbitrary code execution inside a server people installed for screenshots." },
+    { name: "Verification server", tag: "", gives: ["judgment"],
+      sum: "Runs checks the agent did not choose and returns a verdict it cannot edit.",
+      value: "An agent that just wrote a change is the worst judge of it. What this supplies is not capability but independence: checks fixed by someone else, a comparison against the base commit, and a reviewer with no write access.",
+      ex: "CI-status bridges · gate runners · policy linters",
+      risk: "Being advisory. A verdict a model may ignore is a suggestion; enforcement needs an exit code in a hook or a required check on the branch." },
+    { name: "Memory server", tag: "", gives: ["context"],
+      sum: "Persists notes, entities, or decisions across sessions.",
+      value: "Continuity. The context window ends; the project does not.",
+      ex: "knowledge-graph memory · project journals",
+      risk: "Recall without retrieval. Dumping everything remembered into every session, and never noticing that a stored fact went stale, makes the agent confidently out of date." },
+    { name: "Gateway", tag: "", gives: ["control"],
+      sum: "One endpoint fronting many servers, with auth, allowlists, audit and tool budgeting.",
+      value: "The only answer to tool-count sprawl that does not involve asking everyone to install less. Also where an organization can put policy it needs to prove. The enterprise authorization and interceptor extensions aim squarely here.",
+      ex: "enterprise MCP gateways · routing proxies",
+      risk: "It sees every call and can forge any of them, so it is both the single point of failure and the most attractive target in the stack." },
+    { name: "Procedure server", tag: "prompts, skills", gives: ["control"],
+      sum: "Ships workflows rather than capability, through prompts or the skills extension.",
+      value: "Distributes how your team does something, with the user choosing when it applies. Nothing is spent until someone picks it.",
+      ex: "slash-command packs · review checklists · runbooks",
+      risk: "Chronically underused, because clients surfaced tools first and authors followed the rendering." },
+    { name: "App server", tag: "ext-apps", gives: ["capability"],
+      sum: "Returns interactive UI: a ui:// resource the host renders in a sandboxed frame.",
+      value: "Some answers are not prose. A date picker, a chart with a brush, a seat map or a diff view communicates in one glance what three paragraphs approximate, and the frame can call back into the server's tools.",
+      ex: "pickers · dashboards · configurators",
+      risk: "Interface for its own sake. A pane the person must now read and operate is a worse answer than a sentence, whenever a sentence would have done." },
+    { name: "Task server", tag: "ext-tasks", gives: ["capability"],
+      sum: "Accepts work that outlives the request, answering with a taskId to poll.",
+      value: "Migrations, builds, long test suites and deep research do not fit in a call. Handing back a handle lets the agent get on with something else and ask later.",
+      ex: "build and deploy runners · batch jobs · long crawls",
+      risk: "Polling as a habit. An agent that checks every few seconds spends its budget on the question rather than the work; honor pollIntervalMs." }
+  ];
+
+  var list = document.getElementById("pattern-list");
+  var patternEmpty = document.getElementById("pattern-empty");
+  var patternCount = document.getElementById("pattern-count");
+  var search = document.getElementById("pattern-search");
+  var filterBar = document.getElementById("pattern-filter");
+  var active = {};
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text) { n.textContent = text; }
+    return n;
+  }
+
+  PATTERNS.forEach(function (p, i) {
+    var card = el("article", "pattern");
+    card.dataset.index = String(i);
+    var h = el("h3", null);
+    h.appendChild(document.createTextNode(p.name));
+    if (p.tag) { h.appendChild(el("span", "tag", p.tag)); }
+    card.appendChild(h);
+    card.appendChild(el("p", null, p.sum));
+    var dl = el("dl", null);
+    dl.appendChild(el("dt", null, "Value"));
+    dl.appendChild(el("dd", null, p.value));
+    dl.appendChild(el("dt", null, "Examples"));
+    dl.appendChild(el("dd", "ex", p.ex));
+    card.appendChild(dl);
+    card.appendChild(el("p", "risk", p.risk));
+    list.appendChild(card);
+  });
+
+  function applyPatterns() {
+    var q = search.value.trim().toLowerCase();
+    var wanted = Object.keys(active).filter(function (k) { return active[k]; });
+    var shown = 0;
+    PATTERNS.forEach(function (p, i) {
+      var card = list.children[i];
+      var byGives = wanted.length === 0 || wanted.some(function (w) { return p.gives.indexOf(w) !== -1; });
+      var hay = (p.name + " " + p.sum + " " + p.value + " " + p.ex + " " + p.risk).toLowerCase();
+      var byText = q === "" || hay.indexOf(q) !== -1;
+      var on = byGives && byText;
+      card.hidden = !on;
+      if (on) { shown++; }
+    });
+    patternCount.textContent = shown + " of " + PATTERNS.length;
+    patternEmpty.hidden = shown !== 0;
+  }
+  filterBar.addEventListener("click", function (e) {
+    var chip = e.target.closest(".chip");
+    if (!chip) { return; }
+    var k = chip.dataset.gives;
+    active[k] = !active[k];
+    chip.setAttribute("aria-pressed", active[k] ? "true" : "false");
+    applyPatterns();
+  });
+  search.addEventListener("input", applyPatterns);
+
+  /* ----------------------------- picker ----------------------------- */
+  var REQS = [
+    { id: "local", label: "It reads or writes files, or runs commands, on the user's own machine.",
+      gives: [
+        { kind: "Transport", name: "stdio", why: "The only form that can see the machine. No remote server can." },
+        { kind: "Pattern", name: "Local bridge", why: "Scope the paths and default to read-only." }
+      ] },
+    { id: "team", label: "Other people or customers use it, not just me.",
+      gives: [
+        { kind: "Transport", name: "Streamable HTTP", why: "One POST endpoint, stateless, behind an ordinary load balancer." },
+        { kind: "Requirement", name: "OAuth 2.1 + RFC 9728", why: "Protected resource metadata, the RFC 8707 resource parameter, and audience validation on every token." }
+      ] },
+    { id: "api", label: "It wraps a third-party API that needs a secret.",
+      gives: [
+        { kind: "Pattern", name: "API bridge", why: "The server holds the credential; the model never sees it." },
+        { kind: "Discipline", name: "Under ~15 tools", why: "Expose the calls that matter, not the whole endpoint list." }
+      ] },
+    { id: "data", label: "It answers questions from a live dataset.",
+      gives: [
+        { kind: "Pattern", name: "Query server", why: "Ship schema introspection, cap every result set, and on a wide schema expose curated views and named metrics rather than raw SQL." },
+        { kind: "Requirement", name: "Read-only role", why: "Bind the server to one and wrap statements in a read-only transaction. Asking the model not to write is a prompt, not a constraint." }
+      ] },
+    { id: "docs", label: "It supplies knowledge the model's training missed.",
+      gives: [
+        { kind: "Pattern", name: "Knowledge lookup", why: "Return the relevant section, never the whole page." }
+      ] },
+    { id: "slow", label: "A single operation can take minutes or hours.",
+      gives: [
+        { kind: "Extension", name: "MCP Tasks", why: "Answer resultType: \"task\" with a taskId and let the client poll tasks/get." }
+      ] },
+    { id: "ask", label: "It sometimes needs an answer from the person mid-call.",
+      gives: [
+        { kind: "Client feature", name: "Elicitation", why: "Use url mode for anything sensitive; form mode is flat primitives only." },
+        { kind: "Pattern", name: "Multi round-trip", why: "Return input_required with requestState; servers may no longer send their own requests." }
+      ] },
+    { id: "visual", label: "The answer is something to look at or manipulate.",
+      gives: [
+        { kind: "Extension", name: "MCP Apps", why: "A tool points at a ui:// HTML resource the host renders in a sandboxed frame." }
+      ] },
+    { id: "ctx", label: "It offers context the host should attach, not something the model calls.",
+      gives: [
+        { kind: "Primitive", name: "Resources", why: "Application-controlled, so it costs nothing until the host attaches it." }
+      ] },
+    { id: "proc", label: "It encodes a procedure my team repeats.",
+      gives: [
+        { kind: "Primitive", name: "Prompts", why: "User-controlled. This is how slash commands are built." },
+        { kind: "Extension", name: "Skills over MCP", why: "Workflow instructions discovered as resources." }
+      ] },
+    { id: "verdict", label: "It must produce a judgment the calling agent cannot influence.",
+      gives: [
+        { kind: "Pattern", name: "Verification server", why: "Fix the checks outside the agent's reach and compare against a base state." },
+        { kind: "Requirement", name: "Enforcement path", why: "An MCP verdict is advice. Put the exit code in a hook or a required check." }
+      ] },
+    { id: "many", label: "We already run too many servers.",
+      gives: [
+        { kind: "Pattern", name: "Gateway", why: "One endpoint, with allowlists, audit and tool budgeting." },
+        { kind: "Extension", name: "Enterprise-Managed Authorization", why: "Centralized access control, with interceptors still incubating." }
+      ] }
+  ];
+
+  var CONFLICTS = [
+    { when: ["local", "team"], title: "Local access and multi-tenant hosting pull apart",
+      text: "A hosted server cannot see anyone's working tree. Either ship a local stdio server per user, or upload the data and accept that it is a different product with different consent questions." },
+    { when: ["slow", "ask"], title: "Long work plus mid-call questions",
+      text: "Do not mix the two round-trip mechanisms by hand. Inside Tasks, mid-flight input arrives through tasks/get reporting input_required and the client answering with tasks/update." },
+    { when: ["local", "visual"], title: "A local server shipping UI",
+      text: "Workable, but the frame runs in the host, not on the machine. Anything the UI needs from the filesystem has to come back through a tools/call, not from the page." },
+    { when: ["api", "many"], title: "One more API bridge, or the gateway",
+      text: "If tool sprawl is already the problem, adding another server makes it worse. Put the new surface behind the gateway and budget its tools from the start." }
+  ];
+
+  var reqList = document.getElementById("req-list");
+  var out = document.getElementById("rec-out");
+  var picked = {};
+
+  REQS.forEach(function (r) {
+    var label = el("label", "req");
+    label.htmlFor = "req-" + r.id;
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = "req-" + r.id;
+    box.dataset.req = r.id;
+    label.appendChild(box);
+    label.appendChild(el("span", null, r.label));
+    reqList.appendChild(label);
+  });
+
+  function renderRecs() {
+    var chosen = REQS.filter(function (r) { return picked[r.id]; });
+    out.textContent = "";
+    if (chosen.length === 0) {
+      out.appendChild(el("p", "placeholder",
+        "Nothing ticked yet. Pick what is true on the left and the forms appear here, with the conflicts."));
+      return;
+    }
+    var seen = {};
+    var recs = [];
+    chosen.forEach(function (r) {
+      r.gives.forEach(function (g) {
+        var key = g.kind + "|" + g.name;
+        if (!seen[key]) { seen[key] = true; recs.push(g); }
+      });
+    });
+    var head = el("h4", null, recs.length + (recs.length === 1 ? " form" : " forms") + " for that");
+    out.appendChild(head);
+    recs.forEach(function (g) {
+      var box = el("div", "rec");
+      box.appendChild(el("span", "kind", g.kind));
+      box.appendChild(el("span", "name", g.name));
+      box.appendChild(el("span", "why", g.why));
+      out.appendChild(box);
+    });
+    CONFLICTS.forEach(function (c) {
+      if (c.when.every(function (id) { return picked[id]; })) {
+        var box = el("div", "conflict");
+        box.appendChild(el("strong", null, c.title + ". "));
+        box.appendChild(document.createTextNode(c.text));
+        out.appendChild(box);
+      }
+    });
+  }
+  reqList.addEventListener("change", function (e) {
+    var box = e.target;
+    if (!box.dataset || !box.dataset.req) { return; }
+    picked[box.dataset.req] = box.checked;
+    renderRecs();
+  });
+
+  /* ---------------------------- stepper ---------------------------- */
+  var STEPS = {
+    1: { note: "The client sends an ordinary request. Nothing about it says a round trip is coming.",
+         json: '{\n  "jsonrpc": "2.0",\n  "id": 1,\n  "method": "tools/call",\n  "params": {\n    "name": "book_table",\n    "arguments": { "restaurant": "Chez Nous" },\n    "_meta": {\n      "io.modelcontextprotocol/protocolVersion": "2026-07-28",\n      "io.modelcontextprotocol/clientCapabilities": { "elicitation": {} }\n    }\n  }\n}' },
+    2: { note: "The server needs something only the person can supply, so it answers the call rather than sending a request of its own.",
+         json: '{\n  "jsonrpc": "2.0",\n  "id": 1,\n  "result": {\n    "resultType": "input_required",\n    "inputRequests": {\n      "when": {\n        "method": "elicitation/create",\n        "params": {\n          "message": "Which evening?",\n          "requestedSchema": { "type": "object",\n            "properties": { "date": { "type": "string" } } }\n        }\n      }\n    },\n    "requestState": "<opaque, HMAC it>"\n  }\n}' },
+    3: { note: "The client gathers the input its own way, then retries the original request under a new id, echoing the state back.",
+         json: '{\n  "jsonrpc": "2.0",\n  "id": 2,\n  "method": "tools/call",\n  "params": {\n    "name": "book_table",\n    "arguments": { "restaurant": "Chez Nous" },\n    "inputResponses": {\n      "when": { "action": "accept",\n                "content": { "date": "2026-11-27" } }\n    },\n    "requestState": "<echoed unchanged>"\n  }\n}' },
+    4: { note: "The server finishes. It could instead return input_required again, as many times as the work needs.",
+         json: '{\n  "jsonrpc": "2.0",\n  "id": 2,\n  "result": {\n    "resultType": "complete",\n    "content": [ { "type": "text",\n                   "text": "Booked for 27 November." } ],\n    "isError": false\n  }\n}' }
+  };
+  var stepsBar = document.getElementById("mrtr-steps");
+  var svg = document.getElementById("mrtr-svg");
+  var note = document.getElementById("mrtr-note");
+  var json = document.getElementById("mrtr-json");
+
+  function showStep(n) {
+    n = Number(n) || 1;
+    Array.prototype.forEach.call(stepsBar.querySelectorAll("button"), function (b) {
+      b.setAttribute("aria-current", Number(b.dataset.step) === n ? "true" : "false");
+    });
+    Array.prototype.forEach.call(svg.querySelectorAll(".mrtr-step"), function (g) {
+      g.classList.toggle("is-dim", Number(g.dataset.step) > n);
+    });
+    note.textContent = STEPS[n].note;
+    json.textContent = STEPS[n].json;
+  }
+  stepsBar.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (b) { showStep(b.dataset.step); }
+  });
+
+  /* ----------------------------- boot ----------------------------- */
+  showStep(1);
+  renderRecs();
+  applyPatterns();
+  applyStatus(store.get("mcp.status") || "all");
+  showView(location.hash.slice(1) || store.get("mcp.view") || "protocol", false);
+})();
+</script>
